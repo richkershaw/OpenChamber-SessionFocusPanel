@@ -7,3 +7,7 @@ node_modules/
 
 # The session focus store lives in the project, not in this repository.
 .openchamber/session-focus/
+
+# OpenCode's runtime index for this project. Project agents, commands and skills
+# under .opencode/ are still committed.
+.opencode/index/
