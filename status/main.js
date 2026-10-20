@@ -2168,7 +2168,6 @@ ${GUEST_UI_LOOK_CSS}`;
       root.append(notice);
     }
     if (isEmpty(doc) && !focusInput.value) {
-      root.append(el2("div", "focus-label", "Focus"));
       root.append(focusInput);
       focusInput.value = "";
       focusInput.classList.add("is-empty");
@@ -2178,7 +2177,6 @@ ${GUEST_UI_LOOK_CSS}`;
       scheduleHeight();
       return;
     }
-    root.append(el2("div", "focus-label", "Focus"));
     if (document.activeElement !== focusInput) {
       focusInput.value = doc.focus;
       focusInput.classList.toggle("is-empty", !doc.focus);

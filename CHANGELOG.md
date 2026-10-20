@@ -19,6 +19,8 @@
 
 - The Work Status section is now titled **Focus** rather than **Session Focus**. The extension
   keeps the longer name on the Extensions card.
+- The card no longer repeats a **FOCUS** label above the sentence — the section header already
+  names it, so the sentence is now the first thing in the card.
 
 ## 0.1.0 — 2026-10-20
 

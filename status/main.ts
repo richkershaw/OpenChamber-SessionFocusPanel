@@ -269,7 +269,6 @@ const render = (): void => {
   }
 
   if (isEmpty(doc) && !focusInput.value) {
-    root.append(el("div", "focus-label", "Focus"));
     root.append(focusInput);
     focusInput.value = "";
     focusInput.classList.add("is-empty");
@@ -280,7 +279,6 @@ const render = (): void => {
     return;
   }
 
-  root.append(el("div", "focus-label", "Focus"));
   if (document.activeElement !== focusInput) {
     focusInput.value = doc.focus;
     focusInput.classList.toggle("is-empty", !doc.focus);
