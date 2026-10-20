@@ -278,23 +278,50 @@ The build plan and the decisions behind the design are in
 
 ### Releasing
 
-The two halves publish separately out of this one repository.
+The extension and the plugin ship separately out of this one repository. **The plugin is published
+from GitHub Actions using npm's Trusted Publishing** — there is no npm token anywhere, on this
+machine or in the repo.
 
 ```bash
-# The extension: bump the root version, rebuild, tag.
+# Bump whichever halves changed, and note it under ## Unreleased in CHANGELOG.md.
 npm version minor --no-git-tag-version
-npm run build
-git commit -am "Release x.y.z"
-git tag vX.Y.Z && git push --follow-tags
+npm --prefix agent/plugin version minor --no-git-tag-version
 
-# The plugin package.
-cd agent/plugin && npm version minor --no-git-tag-version && cd -
-npm run publish:plugin      # builds, then npm publish ./agent/plugin --access public
+npm run check                        # green before you tag
+git commit -am "Release x.y.z"
+git tag vX.Y.Z && git push --follow-tags   # the tag is what publishes
 ```
 
-`npm publish` needs `npm login` and access to the `@richkershaw` scope. `npm pack ./agent/plugin`
-shows exactly what would ship — `package.json`, `README.md` and `dist/index.js`, with
-`@opencode/plugin` declared as a dependency rather than bundled in.
+Pushing the tag runs `.github/workflows/release.yml`, which re-runs the full gate, proves the
+committed bundles match their sources, checks the tag against the version being published, and
+then publishes `agent/plugin`. The extension needs nothing beyond that — it is installed from this
+repository or its git URL.
+
+**One-time setup on npm**, without which the workflow cannot authenticate: on the package's
+settings page at `npmjs.com/package/@richkershaw/openchamber-session-focus-plugin/access`, add a
+**Trusted Publisher** of type **GitHub Actions** with
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `richkershaw` |
+| Repository | `OpenChamber-SessionFocusPanel` |
+| Workflow filename | `release.yml` |
+| Environment | *(leave blank — the job declares none)* |
+
+All four must match exactly; a mismatch shows up as a 404 from the registry rather than an auth
+error, which is worth knowing before you go looking in the wrong place.
+
+`npm pack ./agent/plugin` still shows exactly what would ship — `package.json`, `README.md` and
+`dist/index.js`, with `@opencode/plugin` declared as a dependency rather than bundled in.
+
+### Publishing by hand
+
+Now a fallback rather than the normal path, and it needs a token that npm will keep asking for a
+one-time password, because `npm publish` from a machine has no OIDC identity to present:
+
+```bash
+npm run publish:plugin
+```
 
 ## Known limits
 

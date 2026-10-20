@@ -112,15 +112,23 @@ Every change, without exception:
 4. **Commit** with a message that says *why*. The diff already says what.
 5. **Push to `main`.** There is no PR flow in this repository — commit and push directly.
 6. **Tag** (`v<x.y.z>`) only when asked or when cutting a release. Tags are annotated and pushed
-   with `--follow-tags`.
-7. **Publish the plugin only when the plugin changed**, and only when asked. Extension changes need
-   no publish — it is installed from the folder, so a rebuild plus a section reload is enough.
-   `npm run publish:plugin` builds first, then publishes `--access public` (required for a scoped
-   package to be publicly visible). Publishing needs `npm login` and access to the `@richkershaw`
-   scope.
+   with `--follow-tags` — and **the tag is what publishes**.
+7. **The plugin publishes from CI, not from here.** Pushing a `v*` tag runs
+   `.github/workflows/release.yml`, which re-runs the gate, proves the committed bundles match
+   their sources, checks the tag against the version being published, and publishes the package
+   with npm's Trusted Publishing. There is **no npm token** anywhere — do not add one, and do not
+   try to `npm publish` from this machine: it has no OIDC identity, so it falls back to a
+   one-time password. `npm run publish:plugin` is an emergency fallback only.
+   Extension changes need no publish at all: it is installed from the folder, so a rebuild plus a
+   section reload is enough.
 8. **Never commit** `.openchamber/session-focus/`, `.opencode/index/` or `node_modules/`. All three
    are gitignored deliberately: the first is per-session state, the second is OpenCode's runtime
    index, the third is dependencies.
+
+The release workflow depends on a **one-time npm-side configuration** that no code here can
+verify: the package's trusted publisher must name this repository *and* the workflow filename
+(`release.yml`), exactly. A mismatch surfaces as a 404 from the registry rather than an auth
+error. See "Releasing" in `README.md`.
 
 ## Trying it locally
 

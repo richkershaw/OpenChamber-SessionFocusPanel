@@ -1,0 +1,60 @@
+---
+# Publishes the plugin package, using npm's Trusted Publishing.
+#
+# There is no npm token anywhere: `id-token: write` lets the job mint an OIDC
+# token, and npm exchanges it for a short-lived publish credential because this
+# repository and workflow are registered as the package's trusted publisher on
+# npmjs.com. Provenance is generated with it.
+#
+# The extension is not published — it is installed from this repository or its
+# git URL — so only `agent/plugin` goes to the registry.
+#
+# See "Releasing" in README.md for the setup this depends on.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  # The only reason this workflow can publish. Narrow to this job if it grows.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          # Never cache in a release build.
+          package-manager-cache: false
+
+      - run: npm ci
+
+      # The gate. `check` also rebuilds both artifacts, so the next step can
+      # prove the committed bundles match the sources they were built from.
+      - run: npm run check
+
+      - name: The committed bundles must match their sources
+        run: git diff --exit-code -- status/main.js agent/plugin/dist/index.js
+
+      - name: The tag must match the version being published
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "require('./agent/plugin/package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match plugin version $version"
+            exit 1
+          fi
+          echo "publishing $tag"
+
+      # No token, no --otp: npm authenticates from the OIDC token above.
+      - name: Publish the plugin
+        run: npm publish ./agent/plugin --access public
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
