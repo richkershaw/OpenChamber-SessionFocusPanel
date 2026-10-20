@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Session Focus</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --sf-bg: var(--oc-bg, #ffffff);
+        --sf-fg: var(--oc-fg, #111111);
+        --sf-muted: var(--oc-muted, #6b7280);
+        --sf-border: var(--oc-border, #e5e7eb);
+        --sf-hover: var(--oc-hover, rgba(0, 0, 0, 0.04));
+        --sf-subtle: var(--oc-subtle, #f9fafb);
+        --sf-primary: var(--oc-primary, #2563eb);
+        --sf-primary-fg: var(--oc-primary-fg, #ffffff);
+        --sf-radius: var(--oc-radius, 8px);
+        --sf-font: var(--oc-font, system-ui, -apple-system, "Segoe UI", sans-serif);
+        --sf-mono: var(--oc-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+      }
+
+      html, body { margin: 0; }
+      body {
+        font-family: var(--sf-font);
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--sf-fg);
+        background: transparent;
+      }
+
+      #root { padding: 2px 2px 8px; display: flex; flex-direction: column; gap: 8px; }
+      .empty { color: var(--sf-muted); padding: 10px 2px; }
+
+      .focus-label,
+      .divider {
+        font-size: 9.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--sf-muted);
+      }
+
+      .focus-input {
+        width: 100%;
+        box-sizing: border-box;
+        resize: none;
+        font: inherit;
+        font-weight: 600;
+        color: var(--sf-fg);
+        background: var(--sf-subtle);
+        border: 1px solid var(--sf-border);
+        border-radius: calc(var(--sf-radius) - 2px);
+        padding: 6px 8px;
+        min-height: 40px;
+      }
+      .focus-input:focus { outline: 2px solid var(--sf-primary); outline-offset: -1px; }
+      .focus-input.is-empty { font-weight: 400; color: var(--sf-muted); }
+
+      .bar { display: flex; align-items: center; gap: 8px; }
+      .bar .track { flex: 1; height: 4px; border-radius: 2px; background: var(--sf-border); overflow: hidden; }
+      .bar .fill { height: 100%; width: 0; background: var(--sf-primary); transition: width 160ms ease; }
+      .bar .count { flex: none; color: var(--sf-muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+
+      ul.actions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+      li.row { display: flex; gap: 7px; align-items: flex-start; padding: 3px 4px; border-radius: calc(var(--sf-radius) - 3px); }
+      li.row:hover { background: var(--sf-hover); }
+
+      .tick {
+        flex: none;
+        width: 15px;
+        height: 15px;
+        margin-top: 1px;
+        padding: 0;
+        border-radius: 4px;
+        border: 1.5px solid var(--sf-border);
+        background: transparent;
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        color: var(--sf-primary-fg);
+        font-size: 10px;
+        line-height: 1;
+      }
+      .tick[data-state="doing"] { border-color: var(--sf-primary); }
+      .tick[data-state="doing"]::after {
+        content: "";
+        width: 7px; height: 7px;
+        border-radius: 2px;
+        background: var(--sf-primary);
+      }
+      .tick[data-state="done"] { background: var(--sf-primary); border-color: var(--sf-primary); }
+      .tick[data-state="done"]::after { content: "\2713"; }
+      .tick[data-state="dropped"] { border-style: dashed; }
+
+      .body { flex: 1; min-width: 0; }
+      .text { word-break: break-word; }
+      li[data-state="done"] .text { color: var(--sf-muted); text-decoration: line-through; }
+      li[data-state="dropped"] .text { color: var(--sf-muted); text-decoration: line-through; font-style: italic; }
+      li[data-state="doing"] .text { font-weight: 600; }
+
+      .refs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+      .ref {
+        font-family: var(--sf-mono);
+        font-size: 10px;
+        padding: 0 6px;
+        border: 1px solid var(--sf-border);
+        border-radius: 999px;
+        color: var(--sf-muted);
+        background: transparent;
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .ref:hover { color: var(--sf-fg); border-color: var(--sf-muted); }
+
+      .row-tools { flex: none; display: flex; gap: 2px; opacity: 0; }
+      li.row:hover .row-tools, li.row:focus-within .row-tools { opacity: 1; }
+      .icon-btn {
+        border: 0; background: transparent; cursor: pointer; padding: 1px 3px;
+        color: var(--sf-muted); font-size: 11px; line-height: 1; border-radius: 4px;
+      }
+      .icon-btn:hover { color: var(--sf-fg); background: var(--sf-hover); }
+
+      .divider { display: flex; align-items: center; gap: 8px; margin: 4px 0 1px; }
+      .divider::before, .divider::after { content: ""; height: 1px; background: var(--sf-border); flex: 1; }
+
+      .add-row { display: flex; gap: 6px; align-items: center; }
+      .input {
+        flex: 1; min-width: 0; box-sizing: border-box; font: inherit; color: var(--sf-fg);
+        background: transparent; border: 1px dashed var(--sf-border);
+        border-radius: calc(var(--sf-radius) - 2px); padding: 5px 8px;
+      }
+      .input:focus { outline: none; border-style: solid; border-color: var(--sf-primary); }
+
+      .ref-form { display: grid; grid-template-columns: 1fr 1.4fr auto; gap: 4px; margin: 4px 0 2px 22px; }
+      .ref-form .input { padding: 3px 6px; font-size: 11px; }
+      .save {
+        border: 1px solid var(--sf-border); background: var(--sf-subtle); color: var(--sf-fg);
+        border-radius: 6px; padding: 3px 8px; font: inherit; font-size: 11px; cursor: pointer;
+      }
+
+      .notice {
+        border: 1px solid var(--sf-border);
+        border-left: 3px solid var(--sf-primary);
+        border-radius: 6px;
+        padding: 6px 8px;
+        color: var(--sf-muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="main.js"></script>
+  </body>
+</html>

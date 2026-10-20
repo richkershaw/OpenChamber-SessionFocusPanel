@@ -1,0 +1,9 @@
+node_modules/
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.tsbuildinfo
+
+# The session focus store lives in the project, not in this repository.
+.openchamber/session-focus/

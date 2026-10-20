@@ -1,0 +1,58 @@
+{
+  "name": "openchamber-session-focus-panel",
+  "version": "0.1.0",
+  "description": "A per-session focus card for OpenChamber: what this session is doing, the agreed actions in implementation order, ticked off as they complete.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "keywords": [
+    "openchamber",
+    "openchamber-extension",
+    "opencode",
+    "opencode-plugin",
+    "session-focus"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/richkershaw/OpenChamber-SessionFocusPanel.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": {
+      "openchamber": ">=2.3.0"
+    },
+    "contributes": {
+      "panel": {
+        "id": "session-focus",
+        "name": "Session Focus",
+        "icon": "icon.svg"
+      },
+      "statusSection": {
+        "entry": "status/index.html",
+        "title": "Session Focus",
+        "height": 220,
+        "defaultExpanded": true,
+        "requiresProject": true
+      },
+      "capabilities": [
+        "files"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts",
+    "check": "npm run typecheck && npm run build && npm test"
+  },
+  "devDependencies": {
+    "@openchamber/sdk": "^2.3.0",
+    "@opencode/plugin": "2.0.31",
+    "@types/node": "^24.3.1",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}
