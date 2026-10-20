@@ -226,6 +226,9 @@ against a stand-in host context (`tests/plugin.test.ts`), validate the manifest 
 `@openchamber/sdk` parser (`tests/package.test.ts`), and check that the built plugin package is
 self-contained and loadable (`tests/plugin-package.test.ts`).
 
+The build plan and the decisions behind the design are in
+[`docs/session-focus-panel-plan.md`](./docs/session-focus-panel-plan.md).
+
 ### Releasing
 
 The two halves publish separately out of this one repository.
