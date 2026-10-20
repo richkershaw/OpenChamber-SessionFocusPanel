@@ -15,6 +15,11 @@
 - Verified by packing the package, extracting it with no repository in reach, installing only
   its declared dependency, and driving a real agent turn through it.
 
+### Changed
+
+- The Work Status section is now titled **Focus** rather than **Session Focus**. The extension
+  keeps the longer name on the Extensions card.
+
 ## 0.1.0 — 2026-10-20
 
 First release. A per-session focus card for OpenChamber, and the OpenCode plugin that keeps

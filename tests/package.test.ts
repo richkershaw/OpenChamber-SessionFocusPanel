@@ -31,7 +31,7 @@ test("declares the section surface, and nothing we did not design", () => {
 
   assert.deepEqual(contributes.statusSection, {
     entry: "status/index.html",
-    title: "Session Focus",
+    title: "Focus",
     height: 220,
     defaultExpanded: true,
     requiresProject: true,

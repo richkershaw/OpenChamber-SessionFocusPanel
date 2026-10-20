@@ -53,8 +53,8 @@ In OpenChamber: **Settings → Extensions**, then paste the path to this folder 
 for it) and choose **Add**. Approve the **files** permission — the card reads and writes the
 focus file inside your project.
 
-The card appears in the chat's **Work Status** panel. If you do not see it, open that
-panel's section chooser and enable **Session Focus**. It hides itself when no project is
+The card appears in the chat's **Work Status** panel, as a section titled **Focus**. If you do
+not see it, open that panel's section chooser and enable it. It hides itself when no project is
 open, because the store lives in the project.
 
 ### 2. The plugin

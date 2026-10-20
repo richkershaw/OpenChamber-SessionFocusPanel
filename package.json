@@ -32,7 +32,7 @@
       },
       "statusSection": {
         "entry": "status/index.html",
-        "title": "Session Focus",
+        "title": "Focus",
         "height": 220,
         "defaultExpanded": true,
         "requiresProject": true
