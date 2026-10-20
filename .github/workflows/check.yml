@@ -1,0 +1,39 @@
+---
+# The gate, on every push to main.
+#
+# The release workflow runs the same thing before publishing, so this exists to
+# catch breakage when it is pushed rather than at the next release — the awkward
+# case being a green-looking main that only fails the day someone tags.
+#
+# It publishes nothing and needs no OIDC or secrets: read-only, and safe to be
+# noisy.
+name: Check
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          # Not a release build, but the option is set explicitly so both
+          # workflows read the same way.
+          package-manager-cache: false
+
+      - run: npm ci
+
+      # Typecheck, build both halves, then the tests — the same gate as
+      # `npm run check` locally.
+      - run: npm run check
+
+      - name: The committed bundles must match their sources
+        run: git diff --exit-code -- status/main.js agent/plugin/dist/index.js

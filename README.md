@@ -276,6 +276,9 @@ were found by eye before it existed, and both would have been caught here.
 The build plan and the decisions behind the design are in
 [`docs/session-focus-panel-plan.md`](./docs/session-focus-panel-plan.md).
 
+Two things run in CI: **`check.yml`** on every push to `main` — the same gate, publishing nothing —
+and **`release.yml`** on a `v*` tag, which re-runs it and then publishes the plugin. See below.
+
 ### Releasing
 
 The extension and the plugin ship separately out of this one repository. **The plugin is published
