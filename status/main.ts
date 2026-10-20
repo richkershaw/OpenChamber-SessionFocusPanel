@@ -2,10 +2,9 @@
  * The Session Focus card — `contributes.statusSection` in the chat's Work Status
  * panel.
  *
- * It owns the human half of the store: read the session's focus file, draw it,
- * and write back on a tick, an edit or a new action. The agent's half is the
- * OpenCode plugin in `agent/plugin`, which writes the same file through
- * `shared/store.ts`.
+ * This is the wiring half: the host bridge, the store, polling and writes. All of
+ * the rendering lives in `card.ts`, which knows nothing about the host and can be
+ * driven against a fixture document in a test.
  *
  * The host unloads this frame whenever the section is collapsed or hidden, so
  * nothing here is kept between mounts: every mount rebuilds from the file.
@@ -15,18 +14,19 @@ import { connectHost, HostRequestError } from "@openchamber/sdk";
 import type { GuestStatusControlEvent, HostReadyContext, SessionSnapshot } from "@openchamber/sdk";
 import { applyHostReady } from "@openchamber/sdk/ui";
 
+import { createCard, el } from "./card.ts";
 import {
+  ACTIVITY,
   addAction,
   applyMutation,
   beginAction,
+  clearActivity,
   completeAction,
   displayOrder,
   dropAction,
   linkRef,
-  isEmpty,
   parseDoc,
-  progress,
-  serializeDoc,
+  setActivity,
   setFocus,
   storePath,
   type ActionState,
@@ -44,7 +44,7 @@ const MAX_HEIGHT = 320;
 
 let sessionId: string | null = null;
 let doc: FocusDoc | null = null;
-let failure: string | null = null;
+let busy = false;
 let disposed = false;
 
 /* ------------------------------------------------------------------ store */
@@ -65,6 +65,60 @@ const writeStore = async (content: string): Promise<void> => {
   await host.writeFile(storePath(sessionId), content);
 };
 
+const describe = (error: unknown): string => {
+  if (error instanceof HostRequestError) return `${error.code}: ${error.message}`;
+  return error instanceof Error ? error.message : String(error);
+};
+
+/* ------------------------------------------------------------------- view */
+
+const card = createCard(root, {
+  onFocus(text: string) {
+    void mutate((current) => setFocus(current, { focus: text }, "user"));
+  },
+  onAddAction(text: string) {
+    void mutate((current) => addAction(current, { text }, "user").doc);
+  },
+  onTick(action: FocusAction) {
+    void mutate((current) => {
+      const next: ActionState =
+        action.state === "todo" ? "doing" : action.state === "doing" ? "done" : "todo";
+      if (next === "doing") return beginAction(current, action.id, "user").doc;
+      if (next === "done") return completeAction(current, action.id, "user").doc;
+      return {
+        ...current,
+        actions: current.actions.map((entry) =>
+          entry.id === action.id ? { ...entry, state: "todo" as ActionState, completedAt: undefined } : entry),
+      };
+    });
+  },
+  onDrop(actionId: string) {
+    void mutate((current) => dropAction(current, actionId, "user").doc);
+  },
+  onAttachRef(actionId: string, ref) {
+    void mutate((current) => linkRef(current, actionId, ref, "user").doc);
+  },
+  onOpenRef(ref) {
+    void host.openUrl(ref.url);
+  },
+  onSetStatus(state, detail) {
+    void mutate((current) => setActivity(current, { state, detail }, "user"));
+  },
+  onClearStatus() {
+    void mutate((current) => clearActivity(current, "user"));
+  },
+});
+
+const paint = (): void => {
+  card.update(doc, { busy, now: Date.now() });
+  scheduleHeight();
+};
+
+const paintNotice = (message: string): void => {
+  root.replaceChildren(el("div", "empty", message));
+  scheduleHeight();
+};
+
 /**
  * Every write goes through the shared stale-write guard, so an update from the
  * agent landing between our read and our write is not lost.
@@ -75,291 +129,40 @@ const mutate = async (
 ): Promise<void> => {
   if (!sessionId || disposed) return;
   try {
-    const next = await applyMutation(sessionId, readStore, writeStore, (current) =>
+    doc = await applyMutation(sessionId, readStore, writeStore, (current) =>
       apply({ ...current, updatedBy: writer }));
-    doc = next;
-    failure = null;
   } catch (error) {
-    failure = describe(error);
-  }
-  render();
-};
-
-const describe = (error: unknown): string => {
-  if (error instanceof HostRequestError) return `${error.code}: ${error.message}`;
-  return error instanceof Error ? error.message : String(error);
-};
-
-/* ---------------------------------------------------------------- renderer */
-
-const el = <K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className?: string,
-  text?: string,
-): HTMLElementTagNameMap[K] => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
-
-const focusInput = el("textarea", "focus-input") as HTMLTextAreaElement;
-focusInput.rows = 2;
-focusInput.placeholder = "What is this session doing?";
-focusInput.spellcheck = false;
-let focusDirty = false;
-
-focusInput.addEventListener("focus", () => { focusDirty = true; });
-focusInput.addEventListener("blur", () => {
-  focusDirty = false;
-  void commitFocus();
-});
-focusInput.addEventListener("input", () => autoSizeFocus());
-focusInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    focusInput.blur();
-  }
-});
-focusInput.addEventListener("blur", () => { void renderLater(); });
-
-/** The field's own border, measured rather than assumed, so the fit is exact. */
-const focusBorderWidth = (): number => {
-  const style = getComputedStyle(focusInput);
-  return (Number.parseFloat(style.borderTopWidth) || 0) + (Number.parseFloat(style.borderBottomWidth) || 0);
-};
-
-/**
- * Grow the field to fit its contents. Deliberately uncapped: the host clamps the
- * card's own frame, so a long focus scrolls the card rather than being hidden
- * inside a small field.
- *
- * It has to run while the field is in the document — a detached textarea reports
- * a scrollHeight of 0, which is what silently collapsed this to the CSS
- * `min-height` on every re-render.
- */
-const autoSizeFocus = (): void => {
-  focusInput.style.height = "auto";
-  focusInput.style.height = `${focusInput.scrollHeight + focusBorderWidth()}px`;
-};
-
-let focusTimer: ReturnType<typeof setTimeout> | null = null;
-const commitFocus = async (): Promise<void> => {
-  const value = focusInput.value.trim();
-  if (!doc || value === doc.focus) return;
-  await mutate((current) => setFocus(current, { focus: value }, "user"));
-  scheduleHeight();
-};
-
-focusInput.addEventListener("input", () => {
-  if (focusTimer) clearTimeout(focusTimer);
-  focusTimer = setTimeout(() => { void commitFocus(); }, 700);
-});
-
-const addInput = el("input", "input") as HTMLInputElement;
-addInput.type = "text";
-addInput.placeholder = "Add an action, then Enter";
-
-addInput.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") return;
-  const text = addInput.value.trim();
-  if (!text) return;
-  addInput.value = "";
-  void mutate((current) => addAction(current, { text }, "user").doc);
-});
-
-const onTick = (action: FocusAction): void => {
-  void mutate((current) => {
-    const next: ActionState =
-      action.state === "todo" ? "doing" : action.state === "doing" ? "done" : "todo";
-    if (next === "doing") return beginAction(current, action.id, "user").doc;
-    if (next === "done") return completeAction(current, action.id, "user").doc;
-    return {
-      ...current,
-      actions: current.actions.map((entry) =>
-        entry.id === action.id ? { ...entry, state: "todo" as ActionState, completedAt: undefined } : entry),
-    };
-  });
-};
-
-const rowFor = (action: FocusAction): HTMLLIElement => {
-  const row = el("li", "row");
-  row.dataset.state = action.state;
-
-  const tick = el("button", "tick") as HTMLButtonElement;
-  tick.type = "button";
-  tick.dataset.state = action.state;
-  tick.setAttribute("role", "checkbox");
-  tick.setAttribute("aria-checked", String(action.state === "done"));
-  tick.title =
-    action.state === "todo" ? "Mark as in flight"
-      : action.state === "doing" ? "Mark as done"
-        : "Reopen";
-  tick.addEventListener("click", () => onTick(action));
-  row.append(tick);
-
-  const body = el("div", "body");
-  body.append(el("div", "text", action.text));
-
-  if (action.refs.length) {
-    const refs = el("div", "refs");
-    for (const ref of action.refs) {
-      const chip = el("button", "ref", ref.label) as HTMLButtonElement;
-      chip.type = "button";
-      chip.title = ref.url;
-      chip.addEventListener("click", () => { void host.openUrl(ref.url); });
-      refs.append(chip);
-    }
-    body.append(refs);
-  }
-
-  row.append(body);
-
-  const tools = el("div", "row-tools");
-  const linkBtn = el("button", "icon-btn", "🔗") as HTMLButtonElement;
-  linkBtn.type = "button";
-  linkBtn.title = "Attach a ticket, ADR or PR";
-  linkBtn.addEventListener("click", () => {
-    row.after(refFormFor(action));
-  });
-  tools.append(linkBtn);
-
-  if (action.state !== "dropped") {
-    const dropBtn = el("button", "icon-btn", "✕") as HTMLButtonElement;
-    dropBtn.type = "button";
-    dropBtn.title = "Drop this action";
-    dropBtn.addEventListener("click", () => {
-      void mutate((current) => dropAction(current, action.id, "user").doc);
-    });
-    tools.append(dropBtn);
-  }
-  row.append(tools);
-
-  return row;
-};
-
-const refFormFor = (action: FocusAction): HTMLDivElement => {
-  const form = el("div", "ref-form");
-  const label = el("input", "input") as HTMLInputElement;
-  label.placeholder = "#42 or ADR-0007";
-  const url = el("input", "input") as HTMLInputElement;
-  url.placeholder = "https://…";
-  const save = el("button", "save", "Attach") as HTMLButtonElement;
-  save.type = "button";
-  const submit = (): void => {
-    const l = label.value.trim();
-    const u = url.value.trim();
-    if (!l || !u) return;
-    form.remove();
-    void mutate((current) => linkRef(current, action.id, { label: l, url: u }, "user").doc);
-  };
-  save.addEventListener("click", submit);
-  for (const field of [label, url]) {
-    field.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") { event.preventDefault(); submit(); }
-      if (event.key === "Escape") form.remove();
-    });
-  }
-  form.append(label, url, save);
-  label.focus();
-  return form;
-};
-
-const render = (): void => {
-  if (disposed) return;
-  if (!sessionId) {
-    paintNotice("Open a session to use the focus card.");
-    return;
-  }
-  if (!doc) {
-    paintNotice("Reading the focus for this session…");
-    return;
-  }
-
-  root.replaceChildren();
-
-  if (failure) {
-    const notice = el("div", "notice", failure);
-    root.append(notice);
-  }
-
-  if (isEmpty(doc) && !focusInput.value) {
-    focusInput.value = "";
-    focusInput.classList.add("is-empty");
-    root.append(focusInput);
-    autoSizeFocus();
-    root.append(addRow());
-    root.append(el("div", "empty", "Set the focus and add the first action, or let the agent start it with the focus tools."));
+    card.fail(describe(error));
     scheduleHeight();
     return;
   }
-
-  if (document.activeElement !== focusInput) {
-    focusInput.value = doc.focus;
-    focusInput.classList.toggle("is-empty", !doc.focus);
-  }
-  // Attach before measuring: scrollHeight is 0 while detached.
-  root.append(focusInput);
-  autoSizeFocus();
-
-  const { done, total } = progress(doc);
-  const bar = el("div", "bar");
-  const track = el("div", "track");
-  const fill = el("div", "fill");
-  fill.style.width = total ? `${Math.round((done / total) * 100)}%` : "0%";
-  track.append(fill);
-  bar.append(track, el("span", "count", `${done} / ${total} done`));
-  root.append(bar);
-
-  const { active, completed } = displayOrder(doc);
-
-  if (active.length) {
-    const list = el("ul", "actions");
-    for (const action of active) list.append(rowFor(action));
-    root.append(list);
-  }
-
-  if (completed.length) {
-    root.append(el("div", "divider", "done"));
-    const list = el("ul", "actions");
-    for (const action of completed) list.append(rowFor(action));
-    root.append(list);
-  }
-
-  root.append(addRow());
-  scheduleHeight();
+  paint();
 };
 
-const addRow = (): HTMLDivElement => {
-  const wrap = el("div", "add-row");
-  wrap.append(addInput);
-  return wrap;
-};
-
-const paintNotice = (message: string): void => {
-  root.replaceChildren(el("div", "empty", message));
-  scheduleHeight();
-};
-
-const renderLater = (): void => { render(); };
-
-/* ------------------------------------------------------------------ height */
+/* ----------------------------------------------------------------- height */
 
 let heightTimer: ReturnType<typeof setTimeout> | null = null;
 const scheduleHeight = (): void => {
   if (heightTimer) clearTimeout(heightTimer);
   heightTimer = setTimeout(() => {
-    const measured = document.body.scrollHeight;
-    const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(measured)));
+    const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(document.body.scrollHeight)));
     void host.setHeight(clamped).catch(() => undefined);
   }, 30);
 };
 
-/* --------------------------------------------------------- status controls */
+/* -------------------------------------------------------- status controls */
+
+const refsSuffix = (action: FocusAction): string =>
+  action.refs.length ? ` (${action.refs.map((ref) => `${ref.label} ${ref.url}`).join(", ")})` : "";
 
 const promptText = (current: FocusDoc): string => {
   const { active, completed } = displayOrder(current);
-  const lines = [`Session focus: ${current.focus || "(not set)"}`, ""];
+  const lines: string[] = [`Focus: ${current.focus || "(not set)"}`];
+  if (current.status) {
+    const detail = current.status.detail ? `: ${current.status.detail}` : "";
+    lines.push(`Status: ${ACTIVITY[current.status.state].label}${detail}`);
+  }
+  lines.push("");
   if (active.length) {
     lines.push("Still to do:");
     for (const action of active) {
@@ -377,15 +180,11 @@ const promptText = (current: FocusDoc): string => {
   return lines.join("\n").trim();
 };
 
-const refsSuffix = (action: FocusAction): string =>
-  action.refs.length ? ` (${action.refs.map((ref) => `${ref.label} ${ref.url}`).join(", ")})` : "";
-
 const publishControls = (): void => {
-  const controls = [
-    { kind: "button" as const, id: "copy", label: "Copy as prompt" },
-    { kind: "button" as const, id: "refresh", label: "Refresh" },
-  ];
-  void host.setStatusControls(controls).catch(() => undefined);
+  void host.setStatusControls([
+    { kind: "button", id: "copy", label: "Copy as prompt" },
+    { kind: "button", id: "refresh", label: "Refresh" },
+  ]).catch(() => undefined);
 };
 
 host.onStatusControl((event: GuestStatusControlEvent) => {
@@ -400,45 +199,47 @@ host.onStatusControl((event: GuestStatusControlEvent) => {
   }
 });
 
-/* ------------------------------------------------------------------ wiring */
+/* ----------------------------------------------------------------- wiring */
 
 const refresh = async (force = false): Promise<void> => {
   if (!sessionId) return;
   try {
-    const raw = await readStore();
-    const next = parseDoc(raw, sessionId);
+    const next = parseDoc(await readStore(), sessionId);
     if (force || !doc || next.revision !== doc.revision) {
       doc = next;
-      failure = null;
-      render();
+      paint();
     }
   } catch (error) {
-    failure = describe(error);
-    render();
+    card.fail(describe(error));
+    scheduleHeight();
   }
 };
 
 let poll: ReturnType<typeof setInterval> | null = null;
-
-const startPolling = (): void => {
-  if (poll) clearInterval(poll);
-  poll = setInterval(() => {
-    if (document.visibilityState === "hidden") return;
-    if (document.activeElement === focusInput || focusDirty) return;
-    void refresh();
-  }, POLL_MS);
-};
+poll = setInterval(() => {
+  if (document.visibilityState === "hidden") return;
+  if (document.activeElement instanceof HTMLInputElement) return;
+  if (document.activeElement instanceof HTMLTextAreaElement) return;
+  void refresh();
+}, POLL_MS);
 
 let lastSessionId: string | null = null;
 
 const applySession = (session: SessionSnapshot | null): void => {
+  busy = session?.busy ?? false;
   const nextId = session?.id ?? null;
-  if (nextId === lastSessionId && doc) return;
+  if (nextId === lastSessionId && doc) {
+    paint();
+    return;
+  }
   lastSessionId = nextId;
   sessionId = nextId;
   doc = null;
-  failure = null;
-  render();
+  if (!sessionId) {
+    paintNotice("Open a session to use the focus card.");
+    return;
+  }
+  paintNotice("Reading the focus for this session…");
   void refresh(true);
 };
 
@@ -453,23 +254,19 @@ host.onSessionLifecycle((event) => {
   if (event.phase === "completed") void refresh();
 });
 host.onDirectory((directory) => {
-  if (!directory) {
-    sessionId = null;
-    doc = null;
-    lastSessionId = null;
-    render();
-  }
+  if (directory) return;
+  sessionId = null;
+  doc = null;
+  lastSessionId = null;
+  paintNotice("Open a session to use the focus card.");
 });
 
-startPolling();
-
-const teardown = (): void => {
+window.addEventListener("pagehide", () => {
   disposed = true;
   if (poll) clearInterval(poll);
   if (heightTimer) clearTimeout(heightTimer);
-  if (focusTimer) clearTimeout(focusTimer);
-};
-window.addEventListener("pagehide", teardown);
+});
 
-render();
+paintNotice("Reading the focus for this session…");
+
 export {};

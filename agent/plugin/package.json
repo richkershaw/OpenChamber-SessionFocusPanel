@@ -1,6 +1,6 @@
 {
   "name": "@richkershaw/openchamber-session-focus-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Session Focus tools and system-prompt block for OpenCode — the agent half of the OpenChamber Session Focus panel.",
   "license": "MIT",
   "type": "module",

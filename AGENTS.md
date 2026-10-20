@@ -37,7 +37,8 @@ a plugin, and the extension is the UI.
 
 | | |
 |---|---|
-| `status/` | the OpenChamber extension — the card in the chat's Work Status panel. `main.ts` → `main.js` (IIFE, committed). |
+| `status/card.ts` | the card's rendering. Pure DOM, nothing host-facing, and driven by `tests/card.test.ts` in happy-dom. |
+| `status/main.ts` | the wiring: host bridge, polling, writes. `main.ts` → `main.js` (IIFE, committed). |
 | `agent/plugin/` | the OpenCode v2 plugin — the `focus_*` tools and the system-prompt block. `index.ts` → `dist/index.js` (ESM, committed), published as `@richkershaw/openchamber-session-focus-plugin`. |
 | `shared/store.ts` | the one contract both bundle, so the file format cannot drift between the two writers. |
 
@@ -46,6 +47,21 @@ a plugin, and the extension is the UI.
 `applyMutation` re-reads immediately before writing, verifies after, and replays the change on top
 of a competing writer's copy. It is deliberately *not* compare-and-swap — read that comment before
 changing it, and keep the mutation functions pure since they can run more than once.
+
+**Three similar-sounding fields, on purpose.** `focus` is the high-level aim. `status` is the
+activity — what is happening *right now* — and `lifecycle` is the state of the task itself
+(`active`/`done`/`dropped`). v1 called the lifecycle `status`; `parseDoc` migrates a v1 document by
+*shape* rather than by version, so a `done` task does not revert and the two halves can be at
+different versions.
+
+**One vocabulary.** `ACTIVITY` in `shared/store.ts` holds every status state with its label, tone,
+motion class and the hint the agent is given. The card draws its glyphs from that table and the
+plugin generates its prompt block from it, so they cannot drift. The glyphs themselves live in
+`status/card.ts` — they are presentation.
+
+**Motion is a claim about the world.** A `loop` says work is progressing, so `motionFor()` draws
+one static when the session is not busy. An animation that lies is worse than none: it stops a
+stale status from looking alive. Keep that gate.
 
 **Display rule.** `actions[]` is held in implementation order. The card partitions it for display
 into active first (next at the top), then a divider, then completed items — so an appended action
@@ -72,6 +88,9 @@ plugin is pinned to the OpenCode version it was verified against — check `@ope
   only dropped, so the decision stays visible.
 - **TypeScript has to run under `node --test`.** No enums or namespaces; relative imports need an
   explicit `.ts` extension; type-only imports need `import type`.
+- **`status/card.ts` must not reach for the host.** It takes handlers and a document; keeping it
+  free of `connectHost` is what makes it testable in happy-dom, and it is the only part of the
+  project a type check cannot vouch for.
 - The section header reads `statusSection.title` in the root `package.json` — not the page's
   `<title>`, which nothing displays. Renaming the header is a manifest change, and needs a
   reinstall of the extension before it shows.

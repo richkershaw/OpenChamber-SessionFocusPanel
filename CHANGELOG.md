@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added
+
+- A **status**: what is happening right now, as a state from a fixed vocabulary plus an optional
+  detail. Ten states — `planning`, `implementing`, `testing`, `reviewing`, `waiting-decision`,
+  `waiting-manual`, `waiting-external`, `blocked`, `idle`, `done` — each with its own glyph, tone
+  and motion.
+- **Motion says whether work is really happening.** Only the four working states loop, and only
+  while the session is genuinely busy: a status claiming to be working while the session is idle
+  is drawn static, and its age keeps counting, so a forgotten status looks forgotten. The two
+  waiting-on-you states pulse rather than spin — nothing is progressing there. All motion is
+  suppressed under `prefers-reduced-motion`, and no state relies on it alone.
+- **You can set it too.** Clicking the status row opens the state list and an editable detail, and
+  offers a Clear. A status the agent forgot is fixable without prompting it.
+- `focus_status` for the agent, and the prompt block's state list is generated from the same table
+  the card draws, so the two cannot drift.
+
+### Changed
+
+- The store's task lifecycle is renamed **`lifecycle`**, freeing **`status`** for the activity.
+  A v1 document is migrated by shape rather than by version number, so a `done` task does not
+  revert to `active`, and the two halves can be at different versions without loss.
+- The plugin's prompt block is titled `## Focus` rather than `## Session Focus`, matching the
+  section.
+- `focus_set`'s `status` parameter is now `lifecycle` — a breaking change to that tool, which is
+  why the plugin goes to 0.2.0.
+
 ### Packaging
 
 - The OpenCode plugin is now a **standalone publishable package**,

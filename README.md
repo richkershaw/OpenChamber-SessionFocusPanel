@@ -5,14 +5,16 @@ Work Status panel and answers one question at a glance: **what is this session d
 what did we agree to do about it?**
 
 - A **focus** line — the task and the approach, not the subject area.
+- A **status**: what is happening right now, with a glyph that moves only while it really is.
 - The **agreed actions**, in the order they will be implemented.
 - **Ticked off as they complete** and kept, so the session's history stays visible.
 - **Links** to the ticket, ADR or PR behind an action, where one exists.
 - Kept current **by the agent**, through tools it is told to use at named points in the work.
 
 ```
-FOCUS
   Wire the focus panel to the plugin tools and prove a round-trip.
+
+  ◐ Implementing: the Status field and its icons · 4m
 
   3 / 5 done
   ████████████░░░░░░░░
@@ -110,11 +112,16 @@ One JSON file per session, inside the project:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "sessionId": "ses_...",
   "revision": 7,
   "focus": "Wire the focus panel to the plugin tools and prove a round-trip.",
-  "status": "active",
+  "lifecycle": "active",
+  "status": {
+    "state": "implementing",
+    "detail": "the Status field and its icons",
+    "since": 1792400100000
+  },
   "actions": [
     {
       "id": "a1",
@@ -131,15 +138,26 @@ One JSON file per session, inside the project:
 }
 ```
 
-- `status` is `active`, `done` or `dropped` — the state of the session's task.
-- `state` is `todo`, `doing`, `done` or `dropped`. **At most one action is `doing`.**
-- `actions` is held in implementation order. The card partitions it for display: active
-  items first, then a divider, then completed items — so an action added now appears **above**
-  the completed ones.
-- `updatedBy` says whether the last write came from `agent` or `user`.
+Three fields, and the naming is deliberate:
+
+- `focus` — the high-level aim: what this session is for.
+- `status` — what is happening right now: `state` from the ten below, an optional `detail`, and
+  `since`, when that state began. Absent until someone sets one. `since` only moves when the
+  state changes, so a stuck status is visible as an age.
+- `lifecycle` — `active`, `done` or `dropped`: the state of the task itself, set by `focus_set`.
+
+Also `state` on each action is `todo`, `doing`, `done` or `dropped`, with **at most one action
+`doing`**; `actions` is held in implementation order, and the card partitions it for display —
+active items first, then a divider, then completed items, so an action added now appears **above**
+the completed ones. `updatedBy` says whether the last write came from `agent` or `user`.
 
 A half-written or hand-mangled file is never fatal: an unreadable document reads as empty
 rather than throwing.
+
+> **Upgrading from 0.1.0.** Version 1 wrote the task lifecycle into `status` as a string.
+> `parseDoc` migrates that by *shape* rather than by version number — a leftover
+> `"status": "active"` is read as the lifecycle and the activity is left unset — so the two
+> halves can be at different versions without a `done` task reverting to `active`.
 
 ### Concurrency
 
@@ -159,6 +177,8 @@ The plugin appends this to the system instructions on each model call, with the 
 below it:
 
 - **Focus**: one sentence naming the task and the approach. Replace it when either changes.
+- **Status**: what is happening right now, from the ten below. Set it at the start of a phase, move
+  it as you move between phases, and set `waiting-decision` **before** you ask the question.
 - **Actions**: the agreed steps, in implementation order. Add them before starting work.
 - **Exactly one action in flight** at a time. Mark it before starting.
 - Mark an action **done the moment it is verified**. Never delete one.
@@ -166,12 +186,29 @@ below it:
 - **Attach the ticket, ADR or PR link** as soon as one exists.
 - When the whole task is finished, set the status to `done` and stop updating.
 
+The status states it is offered, generated from the same table the card draws, so the two cannot
+drift:
+
+| State | Means | Motion |
+| --- | --- | --- |
+| `planning` | working out the approach; nothing written yet | loop |
+| `implementing` | writing code | loop |
+| `testing` | running tests, checks or a build | loop |
+| `reviewing` | reading a diff, a report, or existing code | loop |
+| `waiting-decision` | blocked on a choice only you can make | attention |
+| `waiting-manual` | blocked on a click, an install or an approval | attention |
+| `waiting-external` | waiting on CI, a deploy or a long job | static |
+| `blocked` | stuck on a failure or a missing dependency | static |
+| `idle` | between turns; nothing in flight | static |
+| `done` | the task is finished | static |
+
 ### Tools
 
 | Tool | Purpose |
 | --- | --- |
 | `focus_get` | read the focus, status and actions |
-| `focus_set` | set or replace the focus sentence; set the status |
+| `focus_set` | set or replace the focus sentence; set the task lifecycle |
+| `focus_status` | say what is happening right now (`state`, optional `detail`) |
 | `focus_add` | add an action (`position: "next" \| "last"`) |
 | `focus_begin` | mark an action in flight |
 | `focus_complete` | mark an action done |
@@ -183,6 +220,11 @@ or else the first outstanding one. Every tool returns the rendered card, so the 
 usefully in the transcript.
 
 ## Using the card
+
+The **status** line is the agent's to keep honest, but yours to correct: click it to open the
+state list and add or change the detail, or to clear it. A state that claims work is progressing
+only animates while the session is genuinely busy — a forgotten status stops moving and its age
+keeps counting, so a stale one looks stale.
 
 Click an action's tick to move it **outstanding → in flight → done → outstanding**. A new
 action goes in the field at the bottom and lands above the completed block. The link button
@@ -223,8 +265,13 @@ to this repository).
 
 The tests cover the store contract (`tests/store.test.ts`), drive the plugin's real `setup`
 against a stand-in host context (`tests/plugin.test.ts`), validate the manifest with the real
-`@openchamber/sdk` parser (`tests/package.test.ts`), and check that the built plugin package is
-self-contained and loadable (`tests/plugin-package.test.ts`).
+`@openchamber/sdk` parser (`tests/package.test.ts`), check that the built plugin package is
+self-contained and loadable (`tests/plugin-package.test.ts`), and drive the card's rendering
+against a fixture document in **happy-dom** (`tests/card.test.ts`).
+
+That last one is the point of `status/card.ts`: the card is split into rendering (which knows
+nothing about the host and is testable) and `status/main.ts` (the wiring). Two bugs in the card
+were found by eye before it existed, and both would have been caught here.
 
 The build plan and the decisions behind the design are in
 [`docs/session-focus-panel-plan.md`](./docs/session-focus-panel-plan.md).
@@ -256,6 +303,9 @@ shows exactly what would ship — `package.json`, `README.md` and `dist/index.js
 - The host unloads the frame when the section is collapsed, so the card rebuilds from the
   file on every mount. It polls every 2.5s while visible, so an agent update appears within
   a few seconds.
+- Motion is the only cue that something is moving, and it is deliberately suppressed under
+  `prefers-reduced-motion: reduce`. Every state still carries its glyph, its word and its tone,
+  so nothing is conveyed by animation alone.
 - A session that moves to another directory does not take its store with it — the file is
   keyed by session but stored in the project.
 - Nothing prunes finished focus files yet.

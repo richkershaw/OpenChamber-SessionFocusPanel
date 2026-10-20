@@ -7,16 +7,79 @@ import { Plugin } from "@opencode/plugin";
 
 // shared/store.ts
 var STORE_DIR = ".openchamber/session-focus";
-var SCHEMA_VERSION = 1;
+var SCHEMA_VERSION = 2;
+var ACTIVITY = {
+  planning: {
+    label: "Planning",
+    motion: "loop",
+    tone: "neutral",
+    hint: "Working out the approach. Nothing is written yet."
+  },
+  implementing: {
+    label: "Implementing",
+    motion: "loop",
+    tone: "primary",
+    hint: "Writing code."
+  },
+  testing: {
+    label: "Testing",
+    motion: "loop",
+    tone: "info",
+    hint: "Running tests, checks or a build."
+  },
+  reviewing: {
+    label: "Reviewing",
+    motion: "loop",
+    tone: "neutral",
+    hint: "Reading a diff, a report, or existing code."
+  },
+  "waiting-decision": {
+    label: "Waiting for a decision",
+    motion: "attention",
+    tone: "warning",
+    hint: "Blocked on a choice only the human can make. Set this before you ask the question, so it is already showing when they read it."
+  },
+  "waiting-manual": {
+    label: "Waiting for a manual step",
+    motion: "attention",
+    tone: "warning",
+    hint: "Blocked on an action only a human can take: a click, an install, an approval."
+  },
+  "waiting-external": {
+    label: "Waiting on an external job",
+    motion: "static",
+    tone: "neutral",
+    hint: "Waiting on CI, a deploy, or another long-running job you did not start."
+  },
+  blocked: {
+    label: "Blocked",
+    motion: "static",
+    tone: "error",
+    hint: "Stuck on a failure or a missing dependency."
+  },
+  idle: {
+    label: "Idle",
+    motion: "static",
+    tone: "muted",
+    hint: "Between turns; nothing in flight."
+  },
+  done: {
+    label: "Done",
+    motion: "static",
+    tone: "success",
+    hint: "The task is finished."
+  }
+};
+var ACTIVITY_STATES = Object.keys(ACTIVITY);
 var ACTION_STATES = ["todo", "doing", "done", "dropped"];
-var FOCUS_STATUSES = ["active", "done", "dropped"];
+var LIFECYCLES = ["active", "done", "dropped"];
 var storePath = (sessionId) => `${STORE_DIR}/${sessionId}.json`;
 var emptyDoc = (sessionId, now = Date.now()) => ({
   version: SCHEMA_VERSION,
   sessionId,
   revision: 0,
   focus: "",
-  status: "active",
+  lifecycle: "active",
   actions: [],
   updatedAt: now,
   updatedBy: "user"
@@ -58,6 +121,16 @@ var parseActions = (value) => {
   }
   return actions;
 };
+var parseActivity = (value) => {
+  if (!isRecord(value)) return void 0;
+  const state = value.state;
+  if (!ACTIVITY_STATES.includes(state)) return void 0;
+  return {
+    state,
+    detail: asText(value.detail, 200),
+    since: asTime(value.since) ?? 0
+  };
+};
 var parseDoc = (raw, sessionId, now = Date.now()) => {
   if (typeof raw !== "string" || !raw.trim()) return emptyDoc(sessionId, now);
   let value;
@@ -74,13 +147,16 @@ var parseDoc = (raw, sessionId, now = Date.now()) => {
     if (seenDoing) action.state = "todo";
     seenDoing = true;
   }
-  const status = FOCUS_STATUSES.includes(value.status) ? value.status : "active";
+  const legacyLifecycle = typeof value.status === "string" && LIFECYCLES.includes(value.status) ? value.status : void 0;
+  const lifecycle = LIFECYCLES.includes(value.lifecycle) ? value.lifecycle : legacyLifecycle ?? "active";
+  const status = parseActivity(value.status);
   return {
     version: SCHEMA_VERSION,
     sessionId,
     revision: typeof value.revision === "number" && Number.isFinite(value.revision) ? value.revision : 0,
     focus: asText(value.focus, 500),
-    status,
+    lifecycle,
+    ...status ? { status } : {},
     actions,
     updatedAt: asTime(value.updatedAt) ?? now,
     updatedBy: value.updatedBy === "agent" ? "agent" : "user"
@@ -92,7 +168,8 @@ var serializeDoc = (doc) => {
     sessionId: doc.sessionId,
     revision: doc.revision,
     focus: doc.focus,
-    status: doc.status,
+    lifecycle: doc.lifecycle,
+    ...doc.status ? { status: { state: doc.status.state, detail: doc.status.detail, since: doc.status.since } } : {},
     actions: doc.actions.map((action) => ({
       id: action.id,
       text: action.text,
@@ -118,6 +195,15 @@ var progress = (doc) => ({
   total: doc.actions.filter((action) => action.state !== "dropped").length
 });
 var currentAction = (doc) => doc.actions.find((action) => action.state === "doing");
+var formatElapsed = (ms) => {
+  const seconds = Math.max(0, Math.floor(ms / 1e3));
+  if (seconds < 45) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+};
 var touch = (doc, by, now) => ({
   ...doc,
   revision: doc.revision + 1,
@@ -139,8 +225,14 @@ var resolveTarget = (doc, id) => {
 var setFocus = (doc, input, by, now = Date.now()) => {
   const next = { ...doc };
   if (input.focus !== void 0) next.focus = asText(input.focus, 500);
-  if (input.status !== void 0) next.status = input.status;
+  if (input.lifecycle !== void 0) next.lifecycle = input.lifecycle;
   return touch(next, by, now);
+};
+var setActivity = (doc, input, by, now = Date.now()) => {
+  if (!ACTIVITY_STATES.includes(input.state)) return doc;
+  const detail = input.detail === void 0 ? doc.status?.detail ?? "" : asText(input.detail, 200);
+  const since = doc.status?.state === input.state ? doc.status.since : now;
+  return touch({ ...doc, status: { state: input.state, detail, since } }, by, now);
 };
 var addAction = (doc, input, by, now = Date.now()) => {
   const action = {
@@ -250,11 +342,17 @@ var makeStore = (directory, sessionId) => {
   const load = async () => parseDoc(await read(), sessionId);
   return { read, write, load };
 };
-var render = (doc) => {
+var render = (doc, now = Date.now()) => {
   const { done, total } = progress(doc);
   const doing = currentAction(doc);
   const lines = [];
-  lines.push(`Focus: ${doc.focus || "(not set)"}  [${doc.status}]  ${done}/${total} done`);
+  lines.push(`Focus: ${doc.focus || "(not set)"}  [${doc.lifecycle}]  ${done}/${total} done`);
+  if (doc.status) {
+    const detail = doc.status.detail ? `: ${doc.status.detail}` : "";
+    lines.push(`Status: ${ACTIVITY[doc.status.state].label}${detail} (${formatElapsed(now - doc.status.since)})`);
+  } else {
+    lines.push("Status: (not set)");
+  }
   const { active, completed } = displayOrder(doc);
   if (active.length) {
     lines.push("", "Active:");
@@ -275,26 +373,33 @@ var render = (doc) => {
   if (doing) lines.push("", `In flight: ${doing.id} \u2014 ${doing.text}`);
   return lines.join("\n");
 };
-var instructions = (doc) => {
+var instructions = (doc, now = Date.now()) => {
   const lines = [
-    "## Session Focus",
+    "## Focus",
     "",
     "This session keeps a focus card in the Work Status panel. Keep it current \u2014 it is how a",
     "human sees what this session is doing and what was agreed.",
     "",
     "- Focus: one sentence naming the task and the approach, not the subject area. Replace it when",
     "  the task or the approach changes.",
+    "- Status: what is happening right now, from the states below. Set it at the start of a phase,",
+    "  move it as you move between phases, and set `waiting-decision` **before** you ask the",
+    "  question, so it is already showing when they read it.",
     "- Actions: the agreed steps, in the order they will be implemented. Add them before starting",
     "  work on them.",
     "- Exactly one action is in flight (`doing`) at a time. Mark it before you start.",
     "- Mark an action done the moment it is verified. Never delete one.",
     "- New work agreed mid-flight: add it above the completed items (`focus_add` default).",
     "- Attach the ticket, ADR or PR link to its action as soon as one exists (`focus_link`).",
-    "- When the whole task is finished, set the focus status to `done` and stop updating.",
+    "- When the whole task is finished, set `focus_status` to `done` and stop updating. (`focus_set`",
+    "  also takes a `lifecycle` for the task itself: active, done or dropped.)",
     "",
-    "Tools: focus_get, focus_set, focus_add, focus_begin, focus_complete, focus_link, focus_drop.",
+    "Status states (`focus_status`):",
+    ...ACTIVITY_STATES.map((state) => `  ${state} \u2014 ${ACTIVITY[state].hint}`),
     "",
-    render(doc)
+    "Tools: focus_get, focus_set, focus_status, focus_add, focus_begin, focus_complete, focus_link, focus_drop.",
+    "",
+    render(doc, now)
   ];
   return lines.join("\n");
 };
@@ -334,10 +439,10 @@ var index_default = Plugin.define({
       });
       editor.add({
         name: "set",
-        description: "Set or replace the session focus: one sentence naming the task and the approach, not the subject area. Call it when the task or the approach changes. Also sets the focus status.",
+        description: "Set or replace the session focus: one sentence naming the task and the approach, not the subject area. Call it when the task or the approach changes. Also sets the task's own lifecycle (active, done, dropped) \u2014 for what is happening right now, use `focus_status`.",
         input: schema({
           focus: text("The focus sentence."),
-          status: {
+          lifecycle: {
             type: "string",
             enum: ["active", "done", "dropped"],
             description: "active while the session is working on it; done when the whole task is finished."
@@ -345,8 +450,31 @@ var index_default = Plugin.define({
         }),
         options: { namespace: "focus" },
         execute: async (input, context) => {
-          const { focus, status } = input;
-          const doc = await run(context.sessionID, (current) => setFocus(current, { focus, status }, WRITER));
+          const { focus, lifecycle } = input;
+          const doc = await run(context.sessionID, (current) => setFocus(current, { focus, lifecycle }, WRITER));
+          return { content: render(doc) };
+        }
+      });
+      editor.add({
+        name: "status",
+        description: "Say what is happening right now so the human can see it at a glance: which phase you are in and what you are doing in it. Call it at the start of a phase, when you move between phases, before you ask a question, and when you stop to wait for anyone.",
+        input: schema(
+          {
+            state: {
+              type: "string",
+              enum: ACTIVITY_STATES,
+              description: ACTIVITY_STATES.map((state) => `${state}: ${ACTIVITY[state].hint}`).join(" ")
+            },
+            detail: text(
+              "Optional specifics \u2014 'the Status field and its icons'. Omit it to keep the current detail."
+            )
+          },
+          ["state"]
+        ),
+        options: { namespace: "focus" },
+        execute: async (input, context) => {
+          const { state, detail } = input;
+          const doc = await run(context.sessionID, (current) => setActivity(current, { state, detail }, WRITER));
           return { content: render(doc) };
         }
       });

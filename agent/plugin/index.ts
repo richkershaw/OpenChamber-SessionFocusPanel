@@ -20,6 +20,8 @@ import path from "node:path";
 import { Plugin } from "@opencode/plugin";
 
 import {
+  ACTIVITY,
+  ACTIVITY_STATES,
   addAction,
   applyMutation,
   beginAction,
@@ -27,16 +29,19 @@ import {
   currentAction,
   displayOrder,
   dropAction,
+  formatElapsed,
   linkRef,
   isEmpty,
   parseDoc,
   progress,
   serializeDoc,
+  setActivity,
   setFocus,
   storePath,
+  type ActivityState,
   type FocusAction,
   type FocusDoc,
-  type FocusStatus,
+  type Lifecycle,
   type Writer,
 } from "../../shared/store.ts";
 
@@ -80,11 +85,17 @@ const makeStore = (directory: string, sessionId: string) => {
 
 /* -------------------------------------------------------------- formatting */
 
-const render = (doc: FocusDoc): string => {
+const render = (doc: FocusDoc, now: number = Date.now()): string => {
   const { done, total } = progress(doc);
   const doing = currentAction(doc);
   const lines: string[] = [];
-  lines.push(`Focus: ${doc.focus || "(not set)"}  [${doc.status}]  ${done}/${total} done`);
+  lines.push(`Focus: ${doc.focus || "(not set)"}  [${doc.lifecycle}]  ${done}/${total} done`);
+  if (doc.status) {
+    const detail = doc.status.detail ? `: ${doc.status.detail}` : "";
+    lines.push(`Status: ${ACTIVITY[doc.status.state].label}${detail} (${formatElapsed(now - doc.status.since)})`);
+  } else {
+    lines.push("Status: (not set)");
+  }
   const { active, completed } = displayOrder(doc);
   if (active.length) {
     lines.push("", "Active:");
@@ -107,29 +118,38 @@ const render = (doc: FocusDoc): string => {
 };
 
 /**
- * The block appended to the system instructions. The seven bullets are the
- * events at which the agent is expected to keep the card current.
+ * The block appended to the system instructions. The bullets are the events at
+ * which the agent is expected to keep the card current. The state list is
+ * generated from the vocabulary, so what the agent is offered and what the card
+ * draws cannot drift apart.
  */
-const instructions = (doc: FocusDoc): string => {
+const instructions = (doc: FocusDoc, now: number = Date.now()): string => {
   const lines: string[] = [
-    "## Session Focus",
+    "## Focus",
     "",
     "This session keeps a focus card in the Work Status panel. Keep it current — it is how a",
     "human sees what this session is doing and what was agreed.",
     "",
     "- Focus: one sentence naming the task and the approach, not the subject area. Replace it when",
     "  the task or the approach changes.",
+    "- Status: what is happening right now, from the states below. Set it at the start of a phase,",
+    "  move it as you move between phases, and set `waiting-decision` **before** you ask the",
+    "  question, so it is already showing when they read it.",
     "- Actions: the agreed steps, in the order they will be implemented. Add them before starting",
     "  work on them.",
     "- Exactly one action is in flight (`doing`) at a time. Mark it before you start.",
     "- Mark an action done the moment it is verified. Never delete one.",
     "- New work agreed mid-flight: add it above the completed items (`focus_add` default).",
     "- Attach the ticket, ADR or PR link to its action as soon as one exists (`focus_link`).",
-    "- When the whole task is finished, set the focus status to `done` and stop updating.",
+    "- When the whole task is finished, set `focus_status` to `done` and stop updating. (`focus_set`",
+    "  also takes a `lifecycle` for the task itself: active, done or dropped.)",
     "",
-    "Tools: focus_get, focus_set, focus_add, focus_begin, focus_complete, focus_link, focus_drop.",
+    "Status states (`focus_status`):",
+    ...ACTIVITY_STATES.map((state) => `  ${state} — ${ACTIVITY[state].hint}`),
     "",
-    render(doc),
+    "Tools: focus_get, focus_set, focus_status, focus_add, focus_begin, focus_complete, focus_link, focus_drop.",
+    "",
+    render(doc, now),
   ];
   return lines.join("\n");
 };
@@ -196,10 +216,11 @@ export default Plugin.define({
         name: "set",
         description:
           "Set or replace the session focus: one sentence naming the task and the approach, not the "
-          + "subject area. Call it when the task or the approach changes. Also sets the focus status.",
+          + "subject area. Call it when the task or the approach changes. Also sets the task's own "
+          + "lifecycle (active, done, dropped) — for what is happening right now, use `focus_status`.",
         input: schema({
           focus: text("The focus sentence."),
-          status: {
+          lifecycle: {
             type: "string",
             enum: ["active", "done", "dropped"],
             description: "active while the session is working on it; done when the whole task is finished.",
@@ -207,9 +228,37 @@ export default Plugin.define({
         }),
         options: { namespace: "focus" },
         execute: async (input, context) => {
-          const { focus, status } = input as { focus?: string; status?: FocusStatus };
+          const { focus, lifecycle } = input as { focus?: string; lifecycle?: Lifecycle };
           const doc = await run(context.sessionID, (current) =>
-            setFocus(current, { focus, status }, WRITER));
+            setFocus(current, { focus, lifecycle }, WRITER));
+          return { content: render(doc) };
+        },
+      });
+
+      editor.add({
+        name: "status",
+        description:
+          "Say what is happening right now so the human can see it at a glance: which phase you are "
+          + "in and what you are doing in it. Call it at the start of a phase, when you move between "
+          + "phases, before you ask a question, and when you stop to wait for anyone.",
+        input: schema(
+          {
+            state: {
+              type: "string",
+              enum: ACTIVITY_STATES,
+              description: ACTIVITY_STATES.map((state) => `${state}: ${ACTIVITY[state].hint}`).join(" "),
+            },
+            detail: text(
+              "Optional specifics — 'the Status field and its icons'. Omit it to keep the current detail.",
+            ),
+          },
+          ["state"],
+        ),
+        options: { namespace: "focus" },
+        execute: async (input, context) => {
+          const { state, detail } = input as { state: ActivityState; detail?: string };
+          const doc = await run(context.sessionID, (current) =>
+            setActivity(current, { state, detail }, WRITER));
           return { content: render(doc) };
         },
       });

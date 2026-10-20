@@ -14,7 +14,7 @@ import path from "node:path";
 import test from "node:test";
 
 import plugin from "../agent/plugin/index.ts";
-import { parseDoc, storePath } from "../shared/store.ts";
+import { ACTIVITY_STATES, parseDoc, storePath } from "../shared/store.ts";
 
 const SESSION = "ses_plugintest0000001";
 
@@ -71,10 +71,10 @@ const load = async (options: Record<string, unknown> = {}) => {
   return { directory, tools, hooks, namespaces, call, readStore };
 };
 
-test("registers the seven focus tools in one namespace", async () => {
+test("registers the eight focus tools in one namespace", async () => {
   const { tools, namespaces } = await load();
   assert.deepEqual([...tools.keys()].sort(), [
-    "add", "begin", "complete", "drop", "get", "link", "set",
+    "add", "begin", "complete", "drop", "get", "link", "set", "status",
   ]);
   assert.deepEqual(namespaces, [{ name: "focus", description: "Read and maintain this session's focus card" }]);
   for (const tool of tools.values()) {
@@ -139,13 +139,48 @@ test("the context hook appends the focus block to the system instructions", asyn
   assert.equal(event.system.length, 1);
   assert.equal(event.system[0].type, "text");
   const block = event.system[0].text;
-  assert.match(block, /## Session Focus/);
+  assert.match(block, /## Focus/);
   assert.match(block, /Keep the card current\./);
   assert.match(block, /Do the thing/);
-  // the seven events the agent is asked to track
+  // the events the agent is asked to track
   assert.match(block, /Exactly one action is in flight/);
   assert.match(block, /above the completed items/);
   assert.match(block, /Attach the ticket, ADR or PR link/);
+});
+
+test("the prompt block offers every state, generated from the vocabulary", async () => {
+  const { call, hooks } = await load();
+  await call("set", { focus: "Keep the card current." });
+  await call("status", { state: "implementing", detail: "the status row" });
+
+  const event = { sessionID: SESSION, system: [] as Array<{ type: "text"; text: string }> };
+  await hooks[0].callback(event);
+  const block = event.system[0].text;
+
+  for (const state of ACTIVITY_STATES) {
+    assert.ok(block.includes(state), `${state} is offered to the agent`);
+  }
+  assert.match(block, /focus_status/, "the tool that sets it is named");
+  assert.match(block, /Status: Implementing: the status row/, "and the current one is shown");
+});
+
+test("focus_status records the current activity", async () => {
+  const { call, readStore } = await load();
+  await call("set", { focus: "Ship it" });
+  const rendered = await call("status", { state: "waiting-decision", detail: "which naming?" });
+  assert.match(rendered, /Waiting for a decision: which naming\?/);
+
+  const doc = await readStore();
+  assert.equal(doc.status?.state, "waiting-decision");
+  assert.equal(doc.status?.detail, "which naming?");
+});
+
+test("focus_set moves the task lifecycle, not the activity", async () => {
+  const { call, readStore } = await load();
+  await call("set", { focus: "Ship it", lifecycle: "done" });
+  const doc = await readStore();
+  assert.equal(doc.lifecycle, "done");
+  assert.equal(doc.status, undefined, "setting the lifecycle does not invent an activity");
 });
 
 test("the hook stays quiet for an untouched session", async () => {
@@ -157,7 +192,7 @@ test("the hook stays quiet for an untouched session", async () => {
 
 test("instructions: false leaves the tools and drops the hook", async () => {
   const { tools, hooks } = await load({ instructions: false });
-  assert.equal(tools.size, 7);
+  assert.equal(tools.size, 8);
   assert.equal(hooks.length, 0);
 });
 

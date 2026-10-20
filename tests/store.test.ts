@@ -2,19 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ACTIVITY,
+  ACTIVITY_STATES,
   addAction,
   applyMutation,
   beginAction,
+  clearActivity,
   completeAction,
   currentAction,
   displayOrder,
   dropAction,
   emptyDoc,
+  formatElapsed,
   isEmpty,
   linkRef,
   parseDoc,
   progress,
   serializeDoc,
+  setActivity,
   setFocus,
   storePath,
 } from "../shared/store.ts";
@@ -216,4 +221,121 @@ test("applyMutation leaves the document alone when it cannot win", async () => {
     addAction(doc, { text: "Mine" }, "agent", 2_000).doc, { now: 2_000, retries: 1 });
 
   assert.equal(result.actions.length, 0);
+});
+
+/* ------------------------------------------------------------------ status */
+
+test("the vocabulary is complete and every state is described", () => {
+  for (const state of ACTIVITY_STATES) {
+    const descriptor = ACTIVITY[state];
+    assert.ok(descriptor.label.length > 0, `${state} has a label`);
+    assert.ok(descriptor.hint.length > 8, `${state} has a usable hint for the agent`);
+    assert.match(descriptor.hint, /[.!?]$/, `${state} hint reads as a sentence`);
+    assert.ok(["loop", "attention", "static"].includes(descriptor.motion), `${state} motion`);
+  }
+  assert.equal(ACTIVITY_STATES.length, new Set(ACTIVITY_STATES).size, "no duplicates");
+});
+
+test("only states where work is progressing loop", () => {
+  const looping = ACTIVITY_STATES.filter((state) => ACTIVITY[state].motion === "loop");
+  assert.deepEqual(looping.sort(), ["implementing", "planning", "reviewing", "testing"]);
+  // Nothing is moving in these, so a spinner would be a lie.
+  assert.equal(ACTIVITY.blocked.motion, "static");
+  assert.equal(ACTIVITY["waiting-decision"].motion, "attention");
+  assert.equal(ACTIVITY["waiting-manual"].motion, "attention");
+});
+
+test("a status is unset until someone sets one", () => {
+  assert.equal(emptyDoc(SESSION, 1_000).status, undefined);
+  assert.equal(parseDoc(serializeDoc(emptyDoc(SESSION)), SESSION).status, undefined);
+});
+
+test("setting a status records the state, detail and start", () => {
+  const doc = setActivity(emptyDoc(SESSION, 1_000), { state: "implementing", detail: "the card" }, "agent", 1_100);
+  assert.deepEqual(doc.status, { state: "implementing", detail: "the card", since: 1_100 });
+  assert.equal(doc.revision, 1);
+  assert.equal(doc.updatedBy, "agent");
+});
+
+test("`since` only moves when the state itself changes", () => {
+  let doc = setActivity(emptyDoc(SESSION, 1_000), { state: "implementing", detail: "a" }, "agent", 1_100);
+  doc = setActivity(doc, { state: "implementing", detail: "b" }, "agent", 2_000);
+  assert.equal(doc.status?.since, 1_100, "same state, so the clock keeps running");
+  assert.equal(doc.status?.detail, "b");
+  doc = setActivity(doc, { state: "testing" }, "agent", 3_000);
+  assert.equal(doc.status?.since, 3_000, "new state, so the clock restarts");
+  assert.equal(doc.status?.detail, "b", "omitting the detail leaves it alone");
+});
+
+test("an unknown state is refused rather than stored", () => {
+  const doc = emptyDoc(SESSION, 1_000);
+  assert.equal(setActivity(doc, { state: "vibing" as never }, "agent", 1_100), doc);
+});
+
+test("clearing a status removes it, and is a no-op when there is none", () => {
+  const empty = emptyDoc(SESSION, 1_000);
+  assert.equal(clearActivity(empty, "user", 1_100), empty);
+  const set = setActivity(empty, { state: "idle" }, "user", 1_100);
+  const cleared = clearActivity(set, "user", 1_200);
+  assert.equal(cleared.status, undefined);
+  assert.equal("status" in JSON.parse(serializeDoc(cleared)), false, "and is not serialised");
+});
+
+test("a status round-trips through the file", () => {
+  const doc = setActivity(emptyDoc(SESSION, 1_000), { state: "waiting-decision", detail: "which naming?" }, "agent", 1_100);
+  const parsed = parseDoc(serializeDoc(doc), SESSION, 9_999);
+  assert.deepEqual(parsed.status, { state: "waiting-decision", detail: "which naming?", since: 1_100 });
+});
+
+test("a status with an unknown state is dropped, not guessed", () => {
+  const raw = JSON.stringify({ version: 2, status: { state: "vibing", detail: "x", since: 5 } });
+  assert.equal(parseDoc(raw, SESSION).status, undefined);
+  const notAnObject = JSON.stringify({ version: 2, status: 42 });
+  assert.equal(parseDoc(notAnObject, SESSION).status, undefined);
+});
+
+/* ------------------------------------------------------- v1 migration */
+
+test("a v1 document keeps its task lifecycle through the rename", () => {
+  // v1 wrote the lifecycle into `status` as a string.
+  const v1Done = JSON.stringify({ version: 1, focus: "Old work", status: "done", actions: [] });
+  assert.equal(parseDoc(v1Done, SESSION).lifecycle, "done", "a finished task does not revert to active");
+  assert.equal(parseDoc(v1Done, SESSION).status, undefined, "and reads as no activity");
+
+  const v1Active = JSON.stringify({ version: 1, focus: "Old work", status: "active", actions: [] });
+  assert.equal(parseDoc(v1Active, SESSION).lifecycle, "active");
+});
+
+test("the migration is by shape, so a new document wins over a leftover string", () => {
+  const mixed = JSON.stringify({
+    version: 2,
+    lifecycle: "dropped",
+    status: { state: "blocked", detail: "waiting on CI", since: 7 },
+  });
+  const doc = parseDoc(mixed, SESSION);
+  assert.equal(doc.lifecycle, "dropped");
+  assert.deepEqual(doc.status, { state: "blocked", detail: "waiting on CI", since: 7 });
+});
+
+test("a v1 file survives a round trip through the new writer", () => {
+  const v1 = JSON.stringify({ version: 1, focus: "Old work", status: "done", actions: [{ id: "a1", text: "done thing", state: "done" }] });
+  const migrated = parseDoc(v1, SESSION, 5_000);
+  const reread = parseDoc(serializeDoc(migrated), SESSION, 5_000);
+  assert.equal(reread.lifecycle, "done");
+  assert.equal(reread.focus, "Old work");
+  assert.equal(reread.actions.length, 1);
+  assert.equal(reread.status, undefined);
+});
+
+/* -------------------------------------------------------------- elapsed */
+
+test("elapsed time reads as a staleness cue, not a stopwatch", () => {
+  assert.equal(formatElapsed(0), "just now");
+  assert.equal(formatElapsed(44_000), "just now");
+  assert.equal(formatElapsed(45_000), "0m");
+  assert.equal(formatElapsed(4 * 60_000), "4m");
+  assert.equal(formatElapsed(59 * 60_000), "59m");
+  assert.equal(formatElapsed(60 * 60_000), "1h");
+  assert.equal(formatElapsed(25 * 60 * 60_000), "1d");
+  assert.equal(formatElapsed(-5), "just now", "a clock skew does not render nonsense");
 });

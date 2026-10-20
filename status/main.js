@@ -1758,16 +1758,79 @@ ${GUEST_UI_LOOK_CSS}`;
 
   // shared/store.ts
   var STORE_DIR = ".openchamber/session-focus";
-  var SCHEMA_VERSION = 1;
+  var SCHEMA_VERSION = 2;
+  var ACTIVITY = {
+    planning: {
+      label: "Planning",
+      motion: "loop",
+      tone: "neutral",
+      hint: "Working out the approach. Nothing is written yet."
+    },
+    implementing: {
+      label: "Implementing",
+      motion: "loop",
+      tone: "primary",
+      hint: "Writing code."
+    },
+    testing: {
+      label: "Testing",
+      motion: "loop",
+      tone: "info",
+      hint: "Running tests, checks or a build."
+    },
+    reviewing: {
+      label: "Reviewing",
+      motion: "loop",
+      tone: "neutral",
+      hint: "Reading a diff, a report, or existing code."
+    },
+    "waiting-decision": {
+      label: "Waiting for a decision",
+      motion: "attention",
+      tone: "warning",
+      hint: "Blocked on a choice only the human can make. Set this before you ask the question, so it is already showing when they read it."
+    },
+    "waiting-manual": {
+      label: "Waiting for a manual step",
+      motion: "attention",
+      tone: "warning",
+      hint: "Blocked on an action only a human can take: a click, an install, an approval."
+    },
+    "waiting-external": {
+      label: "Waiting on an external job",
+      motion: "static",
+      tone: "neutral",
+      hint: "Waiting on CI, a deploy, or another long-running job you did not start."
+    },
+    blocked: {
+      label: "Blocked",
+      motion: "static",
+      tone: "error",
+      hint: "Stuck on a failure or a missing dependency."
+    },
+    idle: {
+      label: "Idle",
+      motion: "static",
+      tone: "muted",
+      hint: "Between turns; nothing in flight."
+    },
+    done: {
+      label: "Done",
+      motion: "static",
+      tone: "success",
+      hint: "The task is finished."
+    }
+  };
+  var ACTIVITY_STATES = Object.keys(ACTIVITY);
   var ACTION_STATES = ["todo", "doing", "done", "dropped"];
-  var FOCUS_STATUSES = ["active", "done", "dropped"];
+  var LIFECYCLES = ["active", "done", "dropped"];
   var storePath = (sessionId2) => `${STORE_DIR}/${sessionId2}.json`;
   var emptyDoc = (sessionId2, now = Date.now()) => ({
     version: SCHEMA_VERSION,
     sessionId: sessionId2,
     revision: 0,
     focus: "",
-    status: "active",
+    lifecycle: "active",
     actions: [],
     updatedAt: now,
     updatedBy: "user"
@@ -1809,6 +1872,16 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return actions;
   };
+  var parseActivity = (value) => {
+    if (!isRecord(value)) return void 0;
+    const state = value.state;
+    if (!ACTIVITY_STATES.includes(state)) return void 0;
+    return {
+      state,
+      detail: asText(value.detail, 200),
+      since: asTime(value.since) ?? 0
+    };
+  };
   var parseDoc = (raw, sessionId2, now = Date.now()) => {
     if (typeof raw !== "string" || !raw.trim()) return emptyDoc(sessionId2, now);
     let value;
@@ -1825,13 +1898,16 @@ ${GUEST_UI_LOOK_CSS}`;
       if (seenDoing) action.state = "todo";
       seenDoing = true;
     }
-    const status = FOCUS_STATUSES.includes(value.status) ? value.status : "active";
+    const legacyLifecycle = typeof value.status === "string" && LIFECYCLES.includes(value.status) ? value.status : void 0;
+    const lifecycle = LIFECYCLES.includes(value.lifecycle) ? value.lifecycle : legacyLifecycle ?? "active";
+    const status = parseActivity(value.status);
     return {
       version: SCHEMA_VERSION,
       sessionId: sessionId2,
       revision: typeof value.revision === "number" && Number.isFinite(value.revision) ? value.revision : 0,
       focus: asText(value.focus, 500),
-      status,
+      lifecycle,
+      ...status ? { status } : {},
       actions,
       updatedAt: asTime(value.updatedAt) ?? now,
       updatedBy: value.updatedBy === "agent" ? "agent" : "user"
@@ -1843,7 +1919,8 @@ ${GUEST_UI_LOOK_CSS}`;
       sessionId: doc2.sessionId,
       revision: doc2.revision,
       focus: doc2.focus,
-      status: doc2.status,
+      lifecycle: doc2.lifecycle,
+      ...doc2.status ? { status: { state: doc2.status.state, detail: doc2.status.detail, since: doc2.status.since } } : {},
       actions: doc2.actions.map((action) => ({
         id: action.id,
         text: action.text,
@@ -1859,7 +1936,6 @@ ${GUEST_UI_LOOK_CSS}`;
     return `${JSON.stringify(payload, null, 2)}
 `;
   };
-  var isEmpty = (doc2) => !doc2.focus && doc2.actions.length === 0;
   var displayOrder = (doc2) => ({
     active: doc2.actions.filter((action) => action.state === "todo" || action.state === "doing"),
     completed: doc2.actions.filter((action) => action.state === "done" || action.state === "dropped")
@@ -1868,6 +1944,15 @@ ${GUEST_UI_LOOK_CSS}`;
     done: doc2.actions.filter((action) => action.state === "done").length,
     total: doc2.actions.filter((action) => action.state !== "dropped").length
   });
+  var formatElapsed = (ms) => {
+    const seconds = Math.max(0, Math.floor(ms / 1e3));
+    if (seconds < 45) return "just now";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h`;
+    return `${Math.floor(hours / 24)}d`;
+  };
   var touch = (doc2, by, now) => ({
     ...doc2,
     revision: doc2.revision + 1,
@@ -1889,7 +1974,19 @@ ${GUEST_UI_LOOK_CSS}`;
   var setFocus = (doc2, input, by, now = Date.now()) => {
     const next = { ...doc2 };
     if (input.focus !== void 0) next.focus = asText(input.focus, 500);
-    if (input.status !== void 0) next.status = input.status;
+    if (input.lifecycle !== void 0) next.lifecycle = input.lifecycle;
+    return touch(next, by, now);
+  };
+  var setActivity = (doc2, input, by, now = Date.now()) => {
+    if (!ACTIVITY_STATES.includes(input.state)) return doc2;
+    const detail = input.detail === void 0 ? doc2.status?.detail ?? "" : asText(input.detail, 200);
+    const since = doc2.status?.state === input.state ? doc2.status.since : now;
+    return touch({ ...doc2, status: { state: input.state, detail, since } }, by, now);
+  };
+  var clearActivity = (doc2, by, now = Date.now()) => {
+    if (!doc2.status) return doc2;
+    const next = { ...doc2 };
+    delete next.status;
     return touch(next, by, now);
   };
   var addAction = (doc2, input, by, now = Date.now()) => {
@@ -1971,6 +2068,291 @@ ${GUEST_UI_LOOK_CSS}`;
     return last;
   };
 
+  // status/card.ts
+  var el2 = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== void 0) node.textContent = text;
+    return node;
+  };
+  var motionFor = (state, busy2) => {
+    const motion = ACTIVITY[state].motion;
+    return motion === "loop" && !busy2 ? "static" : motion;
+  };
+  var statusText = (activity) => {
+    const { label } = ACTIVITY[activity.state];
+    return activity.detail ? `${label}: ${activity.detail}` : label;
+  };
+  var statusAge = (activity, now) => formatElapsed(now - activity.since);
+  var ICON_PATHS = {
+    planning: ["M13.2 8A5.2 5.2 0 1 1 9.5 3.1", "M8 8h.01"],
+    implementing: ["M6 4.4L2.4 8 6 11.6", "M10 4.4L13.6 8 10 11.6"],
+    testing: ["M6.4 2.2h3.2", "M7 2.2v3.9l-2.7 4.5a1.3 1.3 0 0 0 1.1 1.9h5.2a1.3 1.3 0 0 0 1.1-1.9L9 6.1V2.2"],
+    reviewing: ["M10.6 10.6L14 14", "M11.6 7a4.6 4.6 0 1 1-9.2 0 4.6 4.6 0 0 1 9.2 0z"],
+    "waiting-decision": ["M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12z", "M6.3 6.1a1.75 1.75 0 1 1 2.4 1.9c-.5.2-.7.6-.7 1v.3", "M8 11.6h.01"],
+    "waiting-manual": ["M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12z", "M6.6 6.6l3.2 2.7-1.6.5.8 1.4", "M6.6 6.6v3.2"],
+    "waiting-external": ["M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12z", "M8 4.8V8l2.3 1.5"],
+    blocked: ["M8 2.6l5.6 9.6H2.4z", "M8 6.6v2.6", "M8 11.2h.01"],
+    idle: ["M6.2 3.6v8.8", "M9.8 3.6v8.8"],
+    done: ["M3.6 8.4l3 3 5.8-6.4"]
+  };
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var iconFor = (state) => {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.4");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("data-icon", state);
+    for (const d of ICON_PATHS[state]) {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", d);
+      svg.append(path);
+    }
+    return svg;
+  };
+  var createCard = (root2, handlers) => {
+    let doc2 = null;
+    let options = { busy: false, now: Date.now() };
+    let failure = null;
+    let pickerOpen = false;
+    let detailDraft = "";
+    const focusInput = el2("textarea", "focus-input");
+    focusInput.rows = 2;
+    focusInput.placeholder = "What is this session doing?";
+    focusInput.spellcheck = false;
+    focusInput.setAttribute("aria-label", "Focus");
+    const addInput = el2("input", "input");
+    addInput.type = "text";
+    addInput.placeholder = "Add an action, then Enter";
+    addInput.setAttribute("aria-label", "Add an action");
+    const autoSizeFocus = () => {
+      if (!focusInput.isConnected) return;
+      focusInput.style.height = "auto";
+      focusInput.style.height = `${focusInput.scrollHeight + 2}px`;
+    };
+    focusInput.addEventListener("input", autoSizeFocus);
+    focusInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        focusInput.blur();
+      }
+    });
+    focusInput.addEventListener("blur", () => handlers.onFocus(focusInput.value));
+    addInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      const text = addInput.value.trim();
+      if (!text) return;
+      addInput.value = "";
+      handlers.onAddAction(text);
+    });
+    const statusRow = () => {
+      const row = el2("div", "status-row");
+      const activity = doc2?.status;
+      if (!activity) {
+        row.dataset.empty = "true";
+        const button3 = el2("button", "status-open");
+        button3.type = "button";
+        button3.append(el2("span", "status-blank", "\u25E6"), el2("span", "status-label", "Set a status"));
+        button3.addEventListener("click", () => {
+          pickerOpen = true;
+          detailDraft = "";
+          repaint();
+        });
+        row.append(button3);
+        return row;
+      }
+      row.dataset.state = activity.state;
+      row.dataset.motion = motionFor(activity.state, options.busy);
+      row.dataset.tone = ACTIVITY[activity.state].tone;
+      const button2 = el2("button", "status-open");
+      button2.type = "button";
+      button2.title = "Change status";
+      button2.append(iconFor(activity.state));
+      button2.append(el2("span", "status-label", statusText(activity)));
+      button2.append(el2("span", "status-age", statusAge(activity, options.now)));
+      button2.addEventListener("click", () => {
+        pickerOpen = true;
+        detailDraft = activity.detail;
+        repaint();
+      });
+      row.append(button2);
+      return row;
+    };
+    const statusPicker = () => {
+      const panel = el2("div", "status-picker");
+      panel.setAttribute("role", "group");
+      panel.setAttribute("aria-label", "Set the status");
+      const detail = el2("input", "input");
+      detail.type = "text";
+      detail.placeholder = "What are you doing in it? (optional)";
+      detail.value = detailDraft;
+      detail.addEventListener("input", () => {
+        detailDraft = detail.value;
+      });
+      const commit = (state) => {
+        pickerOpen = false;
+        if (state) handlers.onSetStatus(state, detailDraft.trim());
+        else handlers.onClearStatus();
+        repaint();
+      };
+      const list = el2("div", "status-options");
+      for (const state of ACTIVITY_STATES) {
+        const option = el2("button", "status-option");
+        option.type = "button";
+        option.dataset.state = state;
+        option.dataset.tone = ACTIVITY[state].tone;
+        option.setAttribute("aria-pressed", String(doc2?.status?.state === state));
+        option.append(iconFor(state), el2("span", "status-label", ACTIVITY[state].label));
+        option.title = ACTIVITY[state].hint;
+        option.addEventListener("click", () => commit(state));
+        list.append(option);
+      }
+      panel.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        pickerOpen = false;
+        repaint();
+      });
+      const clear = el2("button", "status-clear", "Clear status");
+      clear.type = "button";
+      clear.addEventListener("click", () => commit(null));
+      panel.append(detail, list, clear);
+      return panel;
+    };
+    const actionRow = (action) => {
+      const row = el2("li", "row");
+      row.dataset.state = action.state;
+      const tick = el2("button", "tick");
+      tick.type = "button";
+      tick.dataset.state = action.state;
+      tick.setAttribute("role", "checkbox");
+      tick.setAttribute("aria-checked", String(action.state === "done"));
+      tick.title = action.state === "todo" ? "Mark as in flight" : action.state === "doing" ? "Mark as done" : "Reopen";
+      tick.addEventListener("click", () => handlers.onTick(action));
+      row.append(tick);
+      const body = el2("div", "body");
+      body.append(el2("div", "text", action.text));
+      if (action.refs.length) {
+        const refs = el2("div", "refs");
+        for (const ref of action.refs) {
+          const chip = el2("button", "ref", ref.label);
+          chip.type = "button";
+          chip.title = ref.url;
+          chip.addEventListener("click", () => handlers.onOpenRef(ref));
+          refs.append(chip);
+        }
+        body.append(refs);
+      }
+      row.append(body);
+      const tools = el2("div", "row-tools");
+      const link = el2("button", "icon-btn", "\u{1F517}");
+      link.type = "button";
+      link.title = "Attach a ticket, ADR or PR";
+      link.addEventListener("click", () => row.after(refForm(action)));
+      tools.append(link);
+      if (action.state !== "dropped") {
+        const drop = el2("button", "icon-btn", "\u2715");
+        drop.type = "button";
+        drop.title = "Drop this action";
+        drop.addEventListener("click", () => handlers.onDrop(action.id));
+        tools.append(drop);
+      }
+      row.append(tools);
+      return row;
+    };
+    const refForm = (action) => {
+      const form = el2("div", "ref-form");
+      const label = el2("input", "input");
+      label.placeholder = "#42 or ADR-0007";
+      const url = el2("input", "input");
+      url.placeholder = "https://\u2026";
+      const save = el2("button", "save", "Attach");
+      save.type = "button";
+      const submit = () => {
+        const l = label.value.trim();
+        const u = url.value.trim();
+        if (!l || !u) return;
+        form.remove();
+        handlers.onAttachRef(action.id, { label: l, url: u });
+      };
+      save.addEventListener("click", submit);
+      for (const field2 of [label, url]) {
+        field2.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            submit();
+          }
+          if (event.key === "Escape") form.remove();
+        });
+      }
+      form.append(label, url, save);
+      label.focus();
+      return form;
+    };
+    const actionList = (actions) => {
+      const ul = el2("ul", "actions");
+      for (const action of actions) ul.append(actionRow(action));
+      return ul;
+    };
+    const repaint = () => {
+      root2.replaceChildren();
+      if (failure) root2.append(el2("div", "notice", failure));
+      if (!doc2) {
+        root2.append(el2("div", "empty", "Loading the focus\u2026"));
+        return;
+      }
+      if (!doc2.focus && !doc2.actions.length) {
+        focusInput.value = "";
+        focusInput.classList.add("is-empty");
+        root2.append(focusInput);
+        autoSizeFocus();
+        root2.append(addInput);
+        root2.append(el2("div", "empty", "Set the focus and add the first action, or let the agent start it with the focus tools."));
+        return;
+      }
+      if (document.activeElement !== focusInput) {
+        focusInput.value = doc2.focus;
+        focusInput.classList.toggle("is-empty", !doc2.focus);
+      }
+      root2.append(focusInput);
+      autoSizeFocus();
+      root2.append(statusRow());
+      if (pickerOpen) root2.append(statusPicker());
+      const { done, total } = progress(doc2);
+      const bar = el2("div", "bar");
+      const track = el2("div", "track");
+      const fill = el2("div", "fill");
+      fill.style.width = total ? `${Math.round(done / total * 100)}%` : "0%";
+      track.append(fill);
+      bar.append(track, el2("span", "count", `${done} / ${total} done`));
+      root2.append(bar);
+      const { active: active2, completed } = displayOrder(doc2);
+      if (active2.length) root2.append(actionList(active2));
+      if (completed.length) {
+        root2.append(el2("div", "divider", "done"));
+        root2.append(actionList(completed));
+      }
+      root2.append(addInput);
+    };
+    return {
+      update(next, nextOptions) {
+        doc2 = next;
+        options = nextOptions;
+        failure = null;
+        repaint();
+      },
+      fail(message) {
+        failure = message;
+        repaint();
+      }
+    };
+  };
+
   // status/main.ts
   var host = connectHost();
   var root = document.querySelector("#root");
@@ -1979,7 +2361,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var MAX_HEIGHT = 320;
   var sessionId = null;
   var doc = null;
-  var failure = null;
+  var busy = false;
   var disposed = false;
   var readStore = async () => {
     if (!sessionId) return void 0;
@@ -1995,245 +2377,80 @@ ${GUEST_UI_LOOK_CSS}`;
     if (!sessionId) return;
     await host.writeFile(storePath(sessionId), content);
   };
-  var mutate = async (apply, writer = "user") => {
-    if (!sessionId || disposed) return;
-    try {
-      const next = await applyMutation(sessionId, readStore, writeStore, (current) => apply({ ...current, updatedBy: writer }));
-      doc = next;
-      failure = null;
-    } catch (error) {
-      failure = describe(error);
-    }
-    render();
-  };
   var describe = (error) => {
     if (error instanceof HostRequestError) return `${error.code}: ${error.message}`;
     return error instanceof Error ? error.message : String(error);
   };
-  var el2 = (tag, className, text) => {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== void 0) node.textContent = text;
-    return node;
-  };
-  var focusInput = el2("textarea", "focus-input");
-  focusInput.rows = 2;
-  focusInput.placeholder = "What is this session doing?";
-  focusInput.spellcheck = false;
-  var focusDirty = false;
-  focusInput.addEventListener("focus", () => {
-    focusDirty = true;
-  });
-  focusInput.addEventListener("blur", () => {
-    focusDirty = false;
-    void commitFocus();
-  });
-  focusInput.addEventListener("input", () => autoSizeFocus());
-  focusInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      focusInput.blur();
-    }
-  });
-  focusInput.addEventListener("blur", () => {
-    void renderLater();
-  });
-  var focusBorderWidth = () => {
-    const style = getComputedStyle(focusInput);
-    return (Number.parseFloat(style.borderTopWidth) || 0) + (Number.parseFloat(style.borderBottomWidth) || 0);
-  };
-  var autoSizeFocus = () => {
-    focusInput.style.height = "auto";
-    focusInput.style.height = `${focusInput.scrollHeight + focusBorderWidth()}px`;
-  };
-  var focusTimer = null;
-  var commitFocus = async () => {
-    const value = focusInput.value.trim();
-    if (!doc || value === doc.focus) return;
-    await mutate((current) => setFocus(current, { focus: value }, "user"));
-    scheduleHeight();
-  };
-  focusInput.addEventListener("input", () => {
-    if (focusTimer) clearTimeout(focusTimer);
-    focusTimer = setTimeout(() => {
-      void commitFocus();
-    }, 700);
-  });
-  var addInput = el2("input", "input");
-  addInput.type = "text";
-  addInput.placeholder = "Add an action, then Enter";
-  addInput.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    const text = addInput.value.trim();
-    if (!text) return;
-    addInput.value = "";
-    void mutate((current) => addAction(current, { text }, "user").doc);
-  });
-  var onTick = (action) => {
-    void mutate((current) => {
-      const next = action.state === "todo" ? "doing" : action.state === "doing" ? "done" : "todo";
-      if (next === "doing") return beginAction(current, action.id, "user").doc;
-      if (next === "done") return completeAction(current, action.id, "user").doc;
-      return {
-        ...current,
-        actions: current.actions.map((entry) => entry.id === action.id ? { ...entry, state: "todo", completedAt: void 0 } : entry)
-      };
-    });
-  };
-  var rowFor = (action) => {
-    const row = el2("li", "row");
-    row.dataset.state = action.state;
-    const tick = el2("button", "tick");
-    tick.type = "button";
-    tick.dataset.state = action.state;
-    tick.setAttribute("role", "checkbox");
-    tick.setAttribute("aria-checked", String(action.state === "done"));
-    tick.title = action.state === "todo" ? "Mark as in flight" : action.state === "doing" ? "Mark as done" : "Reopen";
-    tick.addEventListener("click", () => onTick(action));
-    row.append(tick);
-    const body = el2("div", "body");
-    body.append(el2("div", "text", action.text));
-    if (action.refs.length) {
-      const refs = el2("div", "refs");
-      for (const ref of action.refs) {
-        const chip = el2("button", "ref", ref.label);
-        chip.type = "button";
-        chip.title = ref.url;
-        chip.addEventListener("click", () => {
-          void host.openUrl(ref.url);
-        });
-        refs.append(chip);
-      }
-      body.append(refs);
-    }
-    row.append(body);
-    const tools = el2("div", "row-tools");
-    const linkBtn = el2("button", "icon-btn", "\u{1F517}");
-    linkBtn.type = "button";
-    linkBtn.title = "Attach a ticket, ADR or PR";
-    linkBtn.addEventListener("click", () => {
-      row.after(refFormFor(action));
-    });
-    tools.append(linkBtn);
-    if (action.state !== "dropped") {
-      const dropBtn = el2("button", "icon-btn", "\u2715");
-      dropBtn.type = "button";
-      dropBtn.title = "Drop this action";
-      dropBtn.addEventListener("click", () => {
-        void mutate((current) => dropAction(current, action.id, "user").doc);
+  var card = createCard(root, {
+    onFocus(text) {
+      void mutate((current) => setFocus(current, { focus: text }, "user"));
+    },
+    onAddAction(text) {
+      void mutate((current) => addAction(current, { text }, "user").doc);
+    },
+    onTick(action) {
+      void mutate((current) => {
+        const next = action.state === "todo" ? "doing" : action.state === "doing" ? "done" : "todo";
+        if (next === "doing") return beginAction(current, action.id, "user").doc;
+        if (next === "done") return completeAction(current, action.id, "user").doc;
+        return {
+          ...current,
+          actions: current.actions.map((entry) => entry.id === action.id ? { ...entry, state: "todo", completedAt: void 0 } : entry)
+        };
       });
-      tools.append(dropBtn);
+    },
+    onDrop(actionId) {
+      void mutate((current) => dropAction(current, actionId, "user").doc);
+    },
+    onAttachRef(actionId, ref) {
+      void mutate((current) => linkRef(current, actionId, ref, "user").doc);
+    },
+    onOpenRef(ref) {
+      void host.openUrl(ref.url);
+    },
+    onSetStatus(state, detail) {
+      void mutate((current) => setActivity(current, { state, detail }, "user"));
+    },
+    onClearStatus() {
+      void mutate((current) => clearActivity(current, "user"));
     }
-    row.append(tools);
-    return row;
-  };
-  var refFormFor = (action) => {
-    const form = el2("div", "ref-form");
-    const label = el2("input", "input");
-    label.placeholder = "#42 or ADR-0007";
-    const url = el2("input", "input");
-    url.placeholder = "https://\u2026";
-    const save = el2("button", "save", "Attach");
-    save.type = "button";
-    const submit = () => {
-      const l = label.value.trim();
-      const u = url.value.trim();
-      if (!l || !u) return;
-      form.remove();
-      void mutate((current) => linkRef(current, action.id, { label: l, url: u }, "user").doc);
-    };
-    save.addEventListener("click", submit);
-    for (const field2 of [label, url]) {
-      field2.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          submit();
-        }
-        if (event.key === "Escape") form.remove();
-      });
-    }
-    form.append(label, url, save);
-    label.focus();
-    return form;
-  };
-  var render = () => {
-    if (disposed) return;
-    if (!sessionId) {
-      paintNotice("Open a session to use the focus card.");
-      return;
-    }
-    if (!doc) {
-      paintNotice("Reading the focus for this session\u2026");
-      return;
-    }
-    root.replaceChildren();
-    if (failure) {
-      const notice = el2("div", "notice", failure);
-      root.append(notice);
-    }
-    if (isEmpty(doc) && !focusInput.value) {
-      focusInput.value = "";
-      focusInput.classList.add("is-empty");
-      root.append(focusInput);
-      autoSizeFocus();
-      root.append(addRow());
-      root.append(el2("div", "empty", "Set the focus and add the first action, or let the agent start it with the focus tools."));
-      scheduleHeight();
-      return;
-    }
-    if (document.activeElement !== focusInput) {
-      focusInput.value = doc.focus;
-      focusInput.classList.toggle("is-empty", !doc.focus);
-    }
-    root.append(focusInput);
-    autoSizeFocus();
-    const { done, total } = progress(doc);
-    const bar = el2("div", "bar");
-    const track = el2("div", "track");
-    const fill = el2("div", "fill");
-    fill.style.width = total ? `${Math.round(done / total * 100)}%` : "0%";
-    track.append(fill);
-    bar.append(track, el2("span", "count", `${done} / ${total} done`));
-    root.append(bar);
-    const { active: active2, completed } = displayOrder(doc);
-    if (active2.length) {
-      const list = el2("ul", "actions");
-      for (const action of active2) list.append(rowFor(action));
-      root.append(list);
-    }
-    if (completed.length) {
-      root.append(el2("div", "divider", "done"));
-      const list = el2("ul", "actions");
-      for (const action of completed) list.append(rowFor(action));
-      root.append(list);
-    }
-    root.append(addRow());
+  });
+  var paint = () => {
+    card.update(doc, { busy, now: Date.now() });
     scheduleHeight();
-  };
-  var addRow = () => {
-    const wrap = el2("div", "add-row");
-    wrap.append(addInput);
-    return wrap;
   };
   var paintNotice = (message) => {
     root.replaceChildren(el2("div", "empty", message));
     scheduleHeight();
   };
-  var renderLater = () => {
-    render();
+  var mutate = async (apply, writer = "user") => {
+    if (!sessionId || disposed) return;
+    try {
+      doc = await applyMutation(sessionId, readStore, writeStore, (current) => apply({ ...current, updatedBy: writer }));
+    } catch (error) {
+      card.fail(describe(error));
+      scheduleHeight();
+      return;
+    }
+    paint();
   };
   var heightTimer = null;
   var scheduleHeight = () => {
     if (heightTimer) clearTimeout(heightTimer);
     heightTimer = setTimeout(() => {
-      const measured = document.body.scrollHeight;
-      const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(measured)));
+      const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(document.body.scrollHeight)));
       void host.setHeight(clamped).catch(() => void 0);
     }, 30);
   };
+  var refsSuffix = (action) => action.refs.length ? ` (${action.refs.map((ref) => `${ref.label} ${ref.url}`).join(", ")})` : "";
   var promptText = (current) => {
     const { active: active2, completed } = displayOrder(current);
-    const lines = [`Session focus: ${current.focus || "(not set)"}`, ""];
+    const lines = [`Focus: ${current.focus || "(not set)"}`];
+    if (current.status) {
+      const detail = current.status.detail ? `: ${current.status.detail}` : "";
+      lines.push(`Status: ${ACTIVITY[current.status.state].label}${detail}`);
+    }
+    lines.push("");
     if (active2.length) {
       lines.push("Still to do:");
       for (const action of active2) {
@@ -2250,13 +2467,11 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return lines.join("\n").trim();
   };
-  var refsSuffix = (action) => action.refs.length ? ` (${action.refs.map((ref) => `${ref.label} ${ref.url}`).join(", ")})` : "";
   var publishControls = () => {
-    const controls = [
+    void host.setStatusControls([
       { kind: "button", id: "copy", label: "Copy as prompt" },
       { kind: "button", id: "refresh", label: "Refresh" }
-    ];
-    void host.setStatusControls(controls).catch(() => void 0);
+    ]).catch(() => void 0);
   };
   host.onStatusControl((event) => {
     if (event.id === "refresh") {
@@ -2270,36 +2485,39 @@ ${GUEST_UI_LOOK_CSS}`;
   var refresh = async (force = false) => {
     if (!sessionId) return;
     try {
-      const raw = await readStore();
-      const next = parseDoc(raw, sessionId);
+      const next = parseDoc(await readStore(), sessionId);
       if (force || !doc || next.revision !== doc.revision) {
         doc = next;
-        failure = null;
-        render();
+        paint();
       }
     } catch (error) {
-      failure = describe(error);
-      render();
+      card.fail(describe(error));
+      scheduleHeight();
     }
   };
   var poll = null;
-  var startPolling = () => {
-    if (poll) clearInterval(poll);
-    poll = setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      if (document.activeElement === focusInput || focusDirty) return;
-      void refresh();
-    }, POLL_MS);
-  };
+  poll = setInterval(() => {
+    if (document.visibilityState === "hidden") return;
+    if (document.activeElement instanceof HTMLInputElement) return;
+    if (document.activeElement instanceof HTMLTextAreaElement) return;
+    void refresh();
+  }, POLL_MS);
   var lastSessionId = null;
   var applySession = (session) => {
+    busy = session?.busy ?? false;
     const nextId3 = session?.id ?? null;
-    if (nextId3 === lastSessionId && doc) return;
+    if (nextId3 === lastSessionId && doc) {
+      paint();
+      return;
+    }
     lastSessionId = nextId3;
     sessionId = nextId3;
     doc = null;
-    failure = null;
-    render();
+    if (!sessionId) {
+      paintNotice("Open a session to use the focus card.");
+      return;
+    }
+    paintNotice("Reading the focus for this session\u2026");
     void refresh(true);
   };
   host.onReady((ctx) => {
@@ -2314,20 +2532,16 @@ ${GUEST_UI_LOOK_CSS}`;
     if (event.phase === "completed") void refresh();
   });
   host.onDirectory((directory) => {
-    if (!directory) {
-      sessionId = null;
-      doc = null;
-      lastSessionId = null;
-      render();
-    }
+    if (directory) return;
+    sessionId = null;
+    doc = null;
+    lastSessionId = null;
+    paintNotice("Open a session to use the focus card.");
   });
-  startPolling();
-  var teardown = () => {
+  window.addEventListener("pagehide", () => {
     disposed = true;
     if (poll) clearInterval(poll);
     if (heightTimer) clearTimeout(heightTimer);
-    if (focusTimer) clearTimeout(focusTimer);
-  };
-  window.addEventListener("pagehide", teardown);
-  render();
+  });
+  paintNotice("Reading the focus for this session\u2026");
 })();

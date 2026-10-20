@@ -144,6 +144,77 @@
         padding: 6px 8px;
         color: var(--sf-muted);
       }
+
+      /* ------------------------------------------------------------ status */
+
+      .status-row { display: flex; }
+      .status-open {
+        display: flex; align-items: flex-start; gap: 6px;
+        flex: 1; min-width: 0; text-align: left;
+        font: inherit; color: var(--sf-fg); cursor: pointer;
+        border: 0; background: transparent;
+        padding: 3px 4px; border-radius: calc(var(--sf-radius) - 3px);
+      }
+      .status-open:hover { background: var(--sf-hover); }
+      .status-open svg { flex: none; margin-top: 1px; }
+      .status-label { flex: 1; min-width: 0; word-break: break-word; }
+      .status-age { flex: none; color: var(--sf-muted); font-size: 10.5px; margin-top: 1px; }
+      .status-row[data-empty="true"] .status-open { color: var(--sf-muted); }
+      .status-blank { flex: none; width: 16px; text-align: center; }
+
+      /* Tone. The host paints these; the fallbacks only matter outside the app. */
+      .status-row[data-tone="primary"] svg,
+      .status-option[data-tone="primary"] svg { color: var(--oc-primary, #2563eb); }
+      .status-row[data-tone="info"] svg,
+      .status-option[data-tone="info"] svg { color: var(--oc-info-text, #2563eb); }
+      .status-row[data-tone="warning"] svg,
+      .status-option[data-tone="warning"] svg { color: var(--oc-warning-text, #b45309); }
+      .status-row[data-tone="error"] svg,
+      .status-option[data-tone="error"] svg { color: var(--oc-error-text, #b91c1c); }
+      .status-row[data-tone="success"] svg,
+      .status-option[data-tone="success"] svg { color: var(--oc-success-text, #15803d); }
+      .status-row[data-tone="neutral"] svg,
+      .status-row[data-tone="muted"] svg { color: var(--sf-muted); }
+
+      /* Motion says whether anything is actually moving. `loop` is only ever
+         applied while the session is busy — see motionFor() in card.ts. */
+      @keyframes sf-spin { to { transform: rotate(360deg); } }
+      @keyframes sf-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+      .status-row[data-motion="loop"] .status-open svg { animation: sf-spin 2.2s linear infinite; }
+      .status-row[data-motion="attention"] .status-open svg { animation: sf-breathe 1.6s ease-in-out infinite; }
+
+      .status-picker {
+        display: flex; flex-direction: column; gap: 6px;
+        border: 1px solid var(--sf-border);
+        border-radius: calc(var(--sf-radius) - 2px);
+        padding: 8px; background: var(--sf-subtle);
+      }
+      .status-options {
+        display: flex; flex-direction: column; gap: 1px;
+        max-height: 176px; overflow-y: auto;
+      }
+      .status-option {
+        display: flex; align-items: center; gap: 7px;
+        font: inherit; color: var(--sf-fg); cursor: pointer; text-align: left;
+        border: 0; background: transparent;
+        padding: 3px 5px; border-radius: 5px;
+      }
+      .status-option:hover { background: var(--sf-hover); }
+      .status-option[aria-pressed="true"] { font-weight: 600; }
+      .status-option svg { flex: none; color: var(--sf-muted); }
+      .status-clear {
+        align-self: flex-start;
+        font: inherit; font-size: 11px; cursor: pointer;
+        border: 0; background: transparent; padding: 2px 5px;
+        border-radius: 5px; color: var(--sf-muted);
+      }
+      .status-clear:hover { color: var(--sf-fg); background: var(--sf-hover); }
+
+      @media (prefers-reduced-motion: reduce) {
+        .status-row[data-motion="loop"] .status-open svg,
+        .status-row[data-motion="attention"] .status-open svg { animation: none; }
+      }
     </style>
   </head>
   <body>

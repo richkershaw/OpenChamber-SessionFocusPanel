@@ -13,17 +13,138 @@
  * re-reads, applies its mutation and writes back, retrying once when another
  * writer got there first (see `applyMutation`).
  *
+ * The document holds two different things, and the naming is deliberate:
+ *
+ *   `focus`      — the high-level aim: what this session is for.
+ *   `status`     — what is happening right now: the activity, and its detail.
+ *   `lifecycle`  — whether the task is active, done or dropped.
+ *
  * Kept dependency-free on purpose: it is bundled into a browser IIFE for the
  * extension, imported by a Node module for the plugin, and run directly by the
  * test suite.
  */
 
 export const STORE_DIR = ".openchamber/session-focus";
-export const SCHEMA_VERSION = 1;
+
+/**
+ * 2 renamed the task lifecycle from `status` to `lifecycle`, freeing `status` for
+ * the activity. `parseDoc` migrates a v1 document by shape rather than by this
+ * number, so the two halves can be at different versions without loss.
+ */
+export const SCHEMA_VERSION = 2;
 
 export type ActionState = "todo" | "doing" | "done" | "dropped";
-export type FocusStatus = "active" | "done" | "dropped";
+export type Lifecycle = "active" | "done" | "dropped";
 export type Writer = "agent" | "user";
+
+/** How a state is animated. Three classes, not ten bespoke animations. */
+export type MotionClass = "loop" | "attention" | "static";
+export type ActivityTone = "neutral" | "primary" | "info" | "warning" | "error" | "muted" | "success";
+
+export type ActivityState =
+  | "planning"
+  | "implementing"
+  | "testing"
+  | "reviewing"
+  | "waiting-decision"
+  | "waiting-manual"
+  | "waiting-external"
+  | "blocked"
+  | "idle"
+  | "done";
+
+export interface ActivityDescriptor {
+  /** Shown in the card and rendered as the state's name. */
+  label: string;
+  motion: MotionClass;
+  tone: ActivityTone;
+  /**
+   * Plain-language guidance for the agent's system prompt, generated from here so
+   * the vocabulary the agent is given cannot drift from the one the card draws.
+   */
+  hint: string;
+}
+
+/**
+ * The vocabulary, in the order the card's picker offers it: the shape of a piece
+ * of work, top to bottom.
+ *
+ * `motion` is a claim about whether anything is actually progressing. The two
+ * wait states deliberately do not loop — nothing is moving, and a spinner there
+ * would be a lie — while `blocked` is static for the same reason.
+ */
+export const ACTIVITY: Record<ActivityState, ActivityDescriptor> = {
+  planning: {
+    label: "Planning",
+    motion: "loop",
+    tone: "neutral",
+    hint: "Working out the approach. Nothing is written yet.",
+  },
+  implementing: {
+    label: "Implementing",
+    motion: "loop",
+    tone: "primary",
+    hint: "Writing code.",
+  },
+  testing: {
+    label: "Testing",
+    motion: "loop",
+    tone: "info",
+    hint: "Running tests, checks or a build.",
+  },
+  reviewing: {
+    label: "Reviewing",
+    motion: "loop",
+    tone: "neutral",
+    hint: "Reading a diff, a report, or existing code.",
+  },
+  "waiting-decision": {
+    label: "Waiting for a decision",
+    motion: "attention",
+    tone: "warning",
+    hint: "Blocked on a choice only the human can make. Set this before you ask the question, so it is already showing when they read it.",
+  },
+  "waiting-manual": {
+    label: "Waiting for a manual step",
+    motion: "attention",
+    tone: "warning",
+    hint: "Blocked on an action only a human can take: a click, an install, an approval.",
+  },
+  "waiting-external": {
+    label: "Waiting on an external job",
+    motion: "static",
+    tone: "neutral",
+    hint: "Waiting on CI, a deploy, or another long-running job you did not start.",
+  },
+  blocked: {
+    label: "Blocked",
+    motion: "static",
+    tone: "error",
+    hint: "Stuck on a failure or a missing dependency.",
+  },
+  idle: {
+    label: "Idle",
+    motion: "static",
+    tone: "muted",
+    hint: "Between turns; nothing in flight.",
+  },
+  done: {
+    label: "Done",
+    motion: "static",
+    tone: "success",
+    hint: "The task is finished.",
+  },
+};
+
+export const ACTIVITY_STATES = Object.keys(ACTIVITY) as ActivityState[];
+
+export interface Activity {
+  state: ActivityState;
+  /** The specifics: "the Status field and its icons". */
+  detail: string;
+  /** When this state began. Only moves when the state changes. */
+  since: number;
+}
 
 export interface FocusRef {
   label: string;
@@ -45,7 +166,9 @@ export interface FocusDoc {
   sessionId: string;
   revision: number;
   focus: string;
-  status: FocusStatus;
+  lifecycle: Lifecycle;
+  /** Absent until someone sets one. */
+  status?: Activity;
   /** Implementation order. The card partitions this for display; see `displayOrder`. */
   actions: FocusAction[];
   updatedAt: number;
@@ -53,7 +176,7 @@ export interface FocusDoc {
 }
 
 const ACTION_STATES: readonly ActionState[] = ["todo", "doing", "done", "dropped"];
-const FOCUS_STATUSES: readonly FocusStatus[] = ["active", "done", "dropped"];
+const LIFECYCLES: readonly Lifecycle[] = ["active", "done", "dropped"];
 
 export const storePath = (sessionId: string): string => `${STORE_DIR}/${sessionId}.json`;
 
@@ -62,7 +185,7 @@ export const emptyDoc = (sessionId: string, now: number = Date.now()): FocusDoc 
   sessionId,
   revision: 0,
   focus: "",
-  status: "active",
+  lifecycle: "active",
   actions: [],
   updatedAt: now,
   updatedBy: "user",
@@ -115,6 +238,18 @@ const parseActions = (value: unknown): FocusAction[] => {
   return actions;
 };
 
+/** An activity is only read when its state is one we know; anything else is unset. */
+const parseActivity = (value: unknown): Activity | undefined => {
+  if (!isRecord(value)) return undefined;
+  const state = value.state as ActivityState;
+  if (!ACTIVITY_STATES.includes(state)) return undefined;
+  return {
+    state,
+    detail: asText(value.detail, 200),
+    since: asTime(value.since) ?? 0,
+  };
+};
+
 /**
  * Tolerant read: a missing, malformed or foreign document yields an empty one
  * rather than throwing, because the card must always be able to draw something.
@@ -136,15 +271,24 @@ export const parseDoc = (raw: string | undefined | null, sessionId: string, now:
     if (seenDoing) action.state = "todo";
     seenDoing = true;
   }
-  const status = FOCUS_STATUSES.includes(value.status as FocusStatus)
-    ? (value.status as FocusStatus)
-    : "active";
+  // v1 stored the task lifecycle in `status` as a string. Read it as the
+  // lifecycle and leave the new `status` unset, so a task marked `done` under v1
+  // does not silently revert to `active`.
+  const legacyLifecycle =
+    typeof value.status === "string" && LIFECYCLES.includes(value.status as Lifecycle)
+      ? (value.status as Lifecycle)
+      : undefined;
+  const lifecycle = LIFECYCLES.includes(value.lifecycle as Lifecycle)
+    ? (value.lifecycle as Lifecycle)
+    : (legacyLifecycle ?? "active");
+  const status = parseActivity(value.status);
   return {
     version: SCHEMA_VERSION,
     sessionId,
     revision: typeof value.revision === "number" && Number.isFinite(value.revision) ? value.revision : 0,
     focus: asText(value.focus, 500),
-    status,
+    lifecycle,
+    ...(status ? { status } : {}),
     actions,
     updatedAt: asTime(value.updatedAt) ?? now,
     updatedBy: value.updatedBy === "agent" ? "agent" : "user",
@@ -158,7 +302,10 @@ export const serializeDoc = (doc: FocusDoc): string => {
     sessionId: doc.sessionId,
     revision: doc.revision,
     focus: doc.focus,
-    status: doc.status,
+    lifecycle: doc.lifecycle,
+    ...(doc.status
+      ? { status: { state: doc.status.state, detail: doc.status.detail, since: doc.status.since } }
+      : {}),
     actions: doc.actions.map((action) => ({
       id: action.id,
       text: action.text,
@@ -195,6 +342,17 @@ export const progress = (doc: FocusDoc): { done: number; total: number } => ({
 export const currentAction = (doc: FocusDoc): FocusAction | undefined =>
   doc.actions.find((action) => action.state === "doing");
 
+/** "just now", "4m", "2h", "3d" — coarse on purpose; it is a staleness cue. */
+export const formatElapsed = (ms: number): string => {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 45) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+};
+
 const touch = (doc: FocusDoc, by: Writer, now: number): FocusDoc => ({
   ...doc,
   revision: doc.revision + 1,
@@ -219,13 +377,37 @@ const resolveTarget = (doc: FocusDoc, id?: string): FocusAction | undefined => {
 
 export const setFocus = (
   doc: FocusDoc,
-  input: { focus?: string; status?: FocusStatus },
+  input: { focus?: string; lifecycle?: Lifecycle },
   by: Writer,
   now: number = Date.now(),
 ): FocusDoc => {
   const next = { ...doc };
   if (input.focus !== undefined) next.focus = asText(input.focus, 500);
-  if (input.status !== undefined) next.status = input.status;
+  if (input.lifecycle !== undefined) next.lifecycle = input.lifecycle;
+  return touch(next, by, now);
+};
+
+/**
+ * What is happening right now. Omitting `detail` leaves it alone, so the agent can
+ * move between states without restating the specifics; `since` only moves when the
+ * state itself changes, which is what makes a stuck status visible.
+ */
+export const setActivity = (
+  doc: FocusDoc,
+  input: { state: ActivityState; detail?: string },
+  by: Writer,
+  now: number = Date.now(),
+): FocusDoc => {
+  if (!ACTIVITY_STATES.includes(input.state)) return doc;
+  const detail = input.detail === undefined ? (doc.status?.detail ?? "") : asText(input.detail, 200);
+  const since = doc.status?.state === input.state ? doc.status.since : now;
+  return touch({ ...doc, status: { state: input.state, detail, since } }, by, now);
+};
+
+export const clearActivity = (doc: FocusDoc, by: Writer, now: number = Date.now()): FocusDoc => {
+  if (!doc.status) return doc;
+  const next = { ...doc };
+  delete next.status;
   return touch(next, by, now);
 };
 
