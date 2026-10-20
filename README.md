@@ -218,6 +218,10 @@ extensions neither at install time nor later.
   keyed by session but stored in the project.
 - Nothing prunes finished focus files yet.
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for release notes.
+
 ## Licence
 
 MIT.
