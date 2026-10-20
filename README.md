@@ -1,5 +1,7 @@
 # OpenChamber Session Focus Panel
 
+**Important:** This extension needs its companion plugin (see `Install` below).
+
 A per-session focus card for [OpenChamber](https://openchamber.dev). It sits in the chat's
 Work Status panel and answers one question at a glance: **what is this session doing, and
 what did we agree to do about it?**
