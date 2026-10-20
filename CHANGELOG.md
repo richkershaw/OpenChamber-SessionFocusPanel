@@ -21,6 +21,9 @@
   keeps the longer name on the Extensions card.
 - The card no longer repeats a **FOCUS** label above the sentence — the section header already
   names it, so the sentence is now the first thing in the card.
+- The focus sentence grows to fit its contents instead of scrolling inside a two-line box. Two
+  things were wrong: the field was capped at 96px, and it was measured while detached, so
+  `scrollHeight` read as 0 on every re-render and the CSS `min-height` took over.
 
 ## 0.1.0 — 2026-10-20
 

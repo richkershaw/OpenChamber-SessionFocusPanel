@@ -123,9 +123,24 @@ focusInput.addEventListener("keydown", (event) => {
 });
 focusInput.addEventListener("blur", () => { void renderLater(); });
 
+/** The field's own border, measured rather than assumed, so the fit is exact. */
+const focusBorderWidth = (): number => {
+  const style = getComputedStyle(focusInput);
+  return (Number.parseFloat(style.borderTopWidth) || 0) + (Number.parseFloat(style.borderBottomWidth) || 0);
+};
+
+/**
+ * Grow the field to fit its contents. Deliberately uncapped: the host clamps the
+ * card's own frame, so a long focus scrolls the card rather than being hidden
+ * inside a small field.
+ *
+ * It has to run while the field is in the document — a detached textarea reports
+ * a scrollHeight of 0, which is what silently collapsed this to the CSS
+ * `min-height` on every re-render.
+ */
 const autoSizeFocus = (): void => {
   focusInput.style.height = "auto";
-  focusInput.style.height = `${Math.min(focusInput.scrollHeight, 96)}px`;
+  focusInput.style.height = `${focusInput.scrollHeight + focusBorderWidth()}px`;
 };
 
 let focusTimer: ReturnType<typeof setTimeout> | null = null;
@@ -269,9 +284,9 @@ const render = (): void => {
   }
 
   if (isEmpty(doc) && !focusInput.value) {
-    root.append(focusInput);
     focusInput.value = "";
     focusInput.classList.add("is-empty");
+    root.append(focusInput);
     autoSizeFocus();
     root.append(addRow());
     root.append(el("div", "empty", "Set the focus and add the first action, or let the agent start it with the focus tools."));
@@ -283,8 +298,9 @@ const render = (): void => {
     focusInput.value = doc.focus;
     focusInput.classList.toggle("is-empty", !doc.focus);
   }
-  autoSizeFocus();
+  // Attach before measuring: scrollHeight is 0 while detached.
   root.append(focusInput);
+  autoSizeFocus();
 
   const { done, total } = progress(doc);
   const bar = el("div", "bar");

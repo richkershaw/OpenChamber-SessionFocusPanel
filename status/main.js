@@ -2038,9 +2038,13 @@ ${GUEST_UI_LOOK_CSS}`;
   focusInput.addEventListener("blur", () => {
     void renderLater();
   });
+  var focusBorderWidth = () => {
+    const style = getComputedStyle(focusInput);
+    return (Number.parseFloat(style.borderTopWidth) || 0) + (Number.parseFloat(style.borderBottomWidth) || 0);
+  };
   var autoSizeFocus = () => {
     focusInput.style.height = "auto";
-    focusInput.style.height = `${Math.min(focusInput.scrollHeight, 96)}px`;
+    focusInput.style.height = `${focusInput.scrollHeight + focusBorderWidth()}px`;
   };
   var focusTimer = null;
   var commitFocus = async () => {
@@ -2168,9 +2172,9 @@ ${GUEST_UI_LOOK_CSS}`;
       root.append(notice);
     }
     if (isEmpty(doc) && !focusInput.value) {
-      root.append(focusInput);
       focusInput.value = "";
       focusInput.classList.add("is-empty");
+      root.append(focusInput);
       autoSizeFocus();
       root.append(addRow());
       root.append(el2("div", "empty", "Set the focus and add the first action, or let the agent start it with the focus tools."));
@@ -2181,8 +2185,8 @@ ${GUEST_UI_LOOK_CSS}`;
       focusInput.value = doc.focus;
       focusInput.classList.toggle("is-empty", !doc.focus);
     }
-    autoSizeFocus();
     root.append(focusInput);
+    autoSizeFocus();
     const { done, total } = progress(doc);
     const bar = el2("div", "bar");
     const track = el2("div", "track");
