@@ -297,19 +297,28 @@ committed bundles match their sources, checks the tag against the version being 
 then publishes `agent/plugin`. The extension needs nothing beyond that — it is installed from this
 repository or its git URL.
 
-**One-time setup on npm**, without which the workflow cannot authenticate: on the package's
-settings page at `npmjs.com/package/@richkershaw/openchamber-session-focus-plugin/access`, add a
-**Trusted Publisher** of type **GitHub Actions** with
+**One-time setup on npm**, without which the workflow cannot authenticate. Register the workflow as
+the package's trusted publisher — the CLI is the reliable way, since it cannot mis-type the
+filename that has to match:
 
-| Field | Value |
-| --- | --- |
-| Organization or user | `richkershaw` |
-| Repository | `OpenChamber-SessionFocusPanel` |
-| Workflow filename | `release.yml` |
-| Environment | *(leave blank — the job declares none)* |
+```bash
+npm trust github @richkershaw/openchamber-session-focus-plugin \
+  --file release.yml \
+  --repo richkershaw/OpenChamber-SessionFocusPanel \
+  --allow-publish
+```
 
-All four must match exactly; a mismatch shows up as a 404 from the registry rather than an auth
-error, which is worth knowing before you go looking in the wrong place.
+It asks for a one-time password. Then confirm, and keep the id it prints — that is what
+`npm trust revoke` takes:
+
+```bash
+npm trust list @richkershaw/openchamber-session-focus-plugin
+```
+
+The same thing exists as a form on the package's settings page at
+`npmjs.com/package/@richkershaw/openchamber-session-focus-plugin/access`, but every field has to
+match the workflow exactly, and a mismatch comes back from the registry as a **404** rather than an
+auth error — worth knowing before you go looking in the wrong place.
 
 `npm pack ./agent/plugin` still shows exactly what would ship — `package.json`, `README.md` and
 `dist/index.js`, with `@opencode/plugin` declared as a dependency rather than bundled in.
