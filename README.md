@@ -59,24 +59,40 @@ open, because the store lives in the project.
 
 ### 2. The plugin
 
-Add this folder to `plugins` in your OpenCode configuration — the project's
-`opencode.json(c)`, or the global one under `~/.config/opencode`:
+Add it to `plugins` in your OpenCode configuration — the project's `opencode.json(c)`, or the
+global one under `~/.config/opencode`:
 
 ```jsonc
 {
-  "plugins": ["/absolute/path/to/OpenChamber-SessionFocusPanel/agent/plugin"]
+  "plugins": ["@richkershaw/openchamber-session-focus-plugin"]
 }
 ```
 
-OpenChamber's **Settings → OpenCode → Plugins** manages both scopes if you would rather do
-it there.
+Or let OpenCode install it for you:
 
-> Keep the repository together. The plugin imports `../../shared/store.ts` on purpose, so
-> it and the card share one definition of the file format. Copying `agent/plugin` out on
-> its own will break that import.
+```sh
+opencode plugin add @richkershaw/openchamber-session-focus-plugin
+```
 
-Point `plugins` at either the project or the global config depending on whether you want
-the focus card in one repository or everywhere.
+OpenChamber's **Settings → OpenCode → Plugins** manages both scopes if you would rather do it
+there. Point it at the project or the global config depending on whether you want the focus
+card in one repository or everywhere.
+
+<details>
+<summary>Installing from this repository instead (developing it)</summary>
+
+Point `plugins` at the built package in this folder, or at the local path if you prefer to run
+from source:
+
+```jsonc
+{ "plugins": ["/absolute/path/to/OpenChamber-SessionFocusPanel/agent/plugin"] }
+```
+
+That path works either way: `agent/plugin/package.json` resolves to `dist/index.js`, which is
+built and committed, and the bundle carries its own copy of the store contract. Run
+`npm run build:plugin` after editing `agent/plugin/index.ts` or `shared/store.ts`.
+
+</details>
 
 ### Tell your projects not to commit the store
 
@@ -182,7 +198,7 @@ from a script. Nothing depends on OpenChamber being the only writer.
 {
   "plugins": [
     {
-      "package": "/absolute/path/to/OpenChamber-SessionFocusPanel/agent/plugin",
+      "package": "@richkershaw/openchamber-session-focus-plugin",
       "options": { "instructions": false }
     }
   ]
@@ -196,16 +212,39 @@ still work; the agent just is not reminded to use them each turn.
 
 ```bash
 npm install
-npm run check     # typecheck, build the card, run the tests
-npm run build     # rebuild status/main.js — commit it, OpenChamber does not build on install
+npm run check     # typecheck, build both halves, run the tests
+npm run build     # rebuild status/main.js and agent/plugin/dist/index.js
 ```
 
-The tests cover the store contract (`tests/store.test.ts`) and validate the manifest with
-the real `@openchamber/sdk` parser, so a manifest that would fail to install fails the
-build (`tests/package.test.ts`).
+Two built artifacts are committed, because neither host builds at install time: the card's
+`status/main.js` (OpenChamber installs no npm dependencies for extensions) and the plugin's
+`agent/plugin/dist/index.js` (OpenCode imports the package from its own cache, with no access
+to this repository).
 
-`status/main.js` is committed deliberately: OpenChamber installs npm dependencies for
-extensions neither at install time nor later.
+The tests cover the store contract (`tests/store.test.ts`), drive the plugin's real `setup`
+against a stand-in host context (`tests/plugin.test.ts`), validate the manifest with the real
+`@openchamber/sdk` parser (`tests/package.test.ts`), and check that the built plugin package is
+self-contained and loadable (`tests/plugin-package.test.ts`).
+
+### Releasing
+
+The two halves publish separately out of this one repository.
+
+```bash
+# The extension: bump the root version, rebuild, tag.
+npm version minor --no-git-tag-version
+npm run build
+git commit -am "Release x.y.z"
+git tag vX.Y.Z && git push --follow-tags
+
+# The plugin package.
+cd agent/plugin && npm version minor --no-git-tag-version && cd -
+npm run publish:plugin      # builds, then npm publish ./agent/plugin --access public
+```
+
+`npm publish` needs `npm login` and access to the `@richkershaw` scope. `npm pack ./agent/plugin`
+shows exactly what would ship — `package.json`, `README.md` and `dist/index.js`, with
+`@opencode/plugin` declared as a dependency rather than bundled in.
 
 ## Known limits
 

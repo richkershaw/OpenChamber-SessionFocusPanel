@@ -1,0 +1,41 @@
+{
+  "name": "@richkershaw/openchamber-session-focus-plugin",
+  "version": "0.1.0",
+  "description": "Session Focus tools and system-prompt block for OpenCode — the agent half of the OpenChamber Session Focus panel.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "openchamber",
+    "session-focus"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/richkershaw/OpenChamber-SessionFocusPanel.git",
+    "directory": "agent/plugin"
+  },
+  "homepage": "https://github.com/richkershaw/OpenChamber-SessionFocusPanel#readme",
+  "bugs": {
+    "url": "https://github.com/richkershaw/OpenChamber-SessionFocusPanel/issues"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-plugin.mjs"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.0.31"
+  }
+}

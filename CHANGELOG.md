@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Packaging
+
+- The OpenCode plugin is now a **standalone publishable package**,
+  `@richkershaw/openchamber-session-focus-plugin`, so installing the agent half is one line in
+  `plugins` instead of an absolute path into this repository.
+- The published bundle carries **its own copy of `shared/store.ts`** rather than importing
+  across folder boundaries, so the package works with this repository out of the picture.
+  `@opencode/plugin` stays a declared dependency, matching how the other published plugins do it.
+- `npm run build` now builds both halves, and `npm run publish:plugin` builds and publishes the
+  package. Both built artifacts are committed.
+- Verified by packing the package, extracting it with no repository in reach, installing only
+  its declared dependency, and driving a real agent turn through it.
+
 ## 0.1.0 — 2026-10-20
 
 First release. A per-session focus card for OpenChamber, and the OpenCode plugin that keeps
