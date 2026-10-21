@@ -74,6 +74,13 @@ appends to `event.system`, which is how the agent is told the focus and when to 
 plugin is pinned to the OpenCode version it was verified against — check `@opencode/plugin` in
 `agent/plugin/package.json` before changing the API surface.
 
+**Never gate the prompt block on the card having content.** It used to be skipped when the card was
+empty, to save tokens, which meant a fresh session got no instructions at all and the agent saw
+only the tool catalogue — the sessions that most needed telling were the ones never told. It is
+injected on every model call now; `options.instructions: false` is the only way out. The same
+lesson applies to the tools: they are declared `pinned`, so their descriptions stay in the
+catalogue instead of collapsing into a summary, because the operational detail lives there.
+
 ## Invariants
 
 - **`shared/store.ts` stays dependency-free.** It is bundled into a browser IIFE *and* a Node ESM

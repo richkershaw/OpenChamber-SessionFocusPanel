@@ -175,8 +175,8 @@ rather than a lock.
 
 ## What the agent is told
 
-The plugin appends this to the system instructions on each model call, with the live state
-below it:
+The plugin appends this to the system instructions on **every model call, including when the card
+is empty**, with the live state below it:
 
 - **Focus**: one sentence naming the task and the approach. Replace it when either changes.
 - **Status**: what is happening right now, from the ten below. Set it at the start of a phase, move
@@ -187,6 +187,20 @@ below it:
 - **New work agreed mid-flight**: add it above the completed items.
 - **Attach the ticket, ADR or PR link** as soon as one exists.
 - When the whole task is finished, set the status to `done` and stop updating.
+
+An empty card ends with an explicit invitation to start one, and `focus_get` answers with the
+workflow rather than a one-line refusal — that tool is the entry point for an agent that has only
+seen the tool catalogue.
+
+> **Why it is never gated.** An earlier version skipped the block when the card was empty, on the
+> reasoning that it saved tokens. That was a cold-start hole: a fresh session received no
+> instructions at all, so the agent saw only the catalogue and the card went unused — the sessions
+> that most needed telling were the ones never told. `options.instructions: false` is the explicit
+> way out if you do not want the cost.
+
+All eight tools are also declared `pinned`, so their descriptions and schemas appear in the tool
+catalogue instead of collapsing into a `focus (8 tools, 1 shown)` summary — the detail lives in
+those descriptions, and summarising them away is what stopped it being read.
 
 The status states it is offered, generated from the same table the card draws, so the two cannot
 drift:

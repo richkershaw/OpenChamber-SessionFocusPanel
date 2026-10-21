@@ -399,10 +399,30 @@ var instructions = (doc, now = Date.now()) => {
     "",
     "Tools: focus_get, focus_set, focus_status, focus_add, focus_begin, focus_complete, focus_link, focus_drop.",
     "",
+    // An empty card gets asked for, rather than merely described.
+    ...isEmpty(doc) ? [
+      "This session's card is empty. Start it now: `focus_set` with one sentence for the focus,",
+      "then `focus_add` for the steps you are about to take, and `focus_status` as you work.",
+      ""
+    ] : [],
     render(doc, now)
   ];
   return lines.join("\n");
 };
+var EMPTY_CARD_GUIDE = [
+  "No focus card for this session yet.",
+  "",
+  "The card keeps a human oriented while you work: what the session is for (the focus), what is",
+  "happening right now (the status), and the agreed steps in the order you will do them.",
+  "",
+  "Start it:",
+  "  focus_set    \u2014 one sentence naming the task and the approach",
+  "  focus_add    \u2014 each agreed step, before you start work on it",
+  "  focus_status \u2014 what you are doing right now, from the states below",
+  "",
+  "Status states (`focus_status`):",
+  ...ACTIVITY_STATES.map((state) => `  ${state} \u2014 ${ACTIVITY[state].hint}`)
+].join("\n");
 var index_default = Plugin.define({
   id: "session-focus",
   async setup(ctx) {
@@ -424,16 +444,16 @@ var index_default = Plugin.define({
     await ctx.tool.transform((editor) => {
       editor.namespace({
         name: "focus",
-        description: "Read and maintain this session's focus card"
+        description: "Maintain this session's focus card: set the status at each phase, tick actions off as they land, and keep the focus sentence current"
       });
       editor.add({
         name: "get",
         description: "Read the session focus: the task sentence, the agreed actions in implementation order, and which one is in flight. Check it before assuming what the session is working on.",
         input: schema({}),
-        options: { namespace: "focus" },
+        options: { namespace: "focus", pinned: true },
         execute: async (_input, context) => {
           const doc = await storeFor(context.sessionID).load();
-          if (isEmpty(doc)) return { content: "No focus set for this session yet. Use focus_set to start it." };
+          if (isEmpty(doc)) return { content: EMPTY_CARD_GUIDE };
           return { content: render(doc) };
         }
       });
@@ -448,7 +468,7 @@ var index_default = Plugin.define({
             description: "active while the session is working on it; done when the whole task is finished."
           }
         }),
-        options: { namespace: "focus" },
+        options: { namespace: "focus", pinned: true },
         execute: async (input, context) => {
           const { focus, lifecycle } = input;
           const doc = await run(context.sessionID, (current) => setFocus(current, { focus, lifecycle }, WRITER));
@@ -471,7 +491,7 @@ var index_default = Plugin.define({
           },
           ["state"]
         ),
-        options: { namespace: "focus" },
+        options: { namespace: "focus", pinned: true },
         execute: async (input, context) => {
           const { state, detail } = input;
           const doc = await run(context.sessionID, (current) => setActivity(current, { state, detail }, WRITER));
@@ -494,7 +514,7 @@ var index_default = Plugin.define({
           },
           ["text"]
         ),
-        options: { namespace: "focus" },
+        options: { namespace: "focus", pinned: true },
         execute: async (input, context) => {
           const { text: body, position, label, url } = input;
           const refs = label && url ? [{ label, url }] : void 0;
@@ -509,7 +529,7 @@ ${render(doc)}` };
         name: "begin",
         description: "Mark one action as in flight. Only one is ever in flight: starting a new one returns the previous one to outstanding. Omit the id to take the current one, else the first outstanding.",
         input: schema({ id: text("Action id, as shown on the card (e.g. 'a2').") }),
-        options: { namespace: "focus" },
+        options: { namespace: "focus", pinned: true },
         execute: async (input, context) => {
           const { id } = input;
           const { doc, action } = await runCapturing(context.sessionID, (current) => beginAction(current, id, WRITER));
@@ -523,7 +543,7 @@ ${render(doc)}` };
         name: "complete",
         description: "Mark an action done. Call it as soon as the action is verified, not at the end of the session. Completed actions stay on the card. Omit the id to take the one in flight, else the first outstanding.",
         input: schema({ id: text("Action id. Omit to complete the action in flight.") }),
-        options: { namespace: "focus" },
+        options: { namespace: "focus", pinned: true },
         execute: async (input, context) => {
           const { id } = input;
           const { doc, action } = await runCapturing(context.sessionID, (current) => completeAction(current, id, WRITER));
@@ -545,7 +565,7 @@ ${render(doc)}` };
           },
           ["id", "label", "url"]
         ),
-        options: { namespace: "focus" },
+        options: { namespace: "focus", pinned: true },
         execute: async (input, context) => {
           const { id, label, url } = input;
           const { doc, action } = await runCapturing(context.sessionID, (current) => linkRef(current, id, { label, url }, WRITER));
@@ -559,7 +579,7 @@ ${render(doc)}` };
         name: "drop",
         description: "Mark an action as no longer wanted. It stays on the card, struck through, so the decision is visible. Use it instead of deleting work that was agreed and then abandoned.",
         input: schema({ id: text("Action id.") }, ["id"]),
-        options: { namespace: "focus" },
+        options: { namespace: "focus", pinned: true },
         execute: async (input, context) => {
           const { id } = input;
           const { doc, action } = await runCapturing(context.sessionID, (current) => dropAction(current, id, WRITER));
@@ -573,7 +593,6 @@ ${render(doc)}` };
     if (ctx.options?.instructions === false) return;
     await ctx.session.hook("context", async (event) => {
       const doc = await storeFor(event.sessionID).load();
-      if (isEmpty(doc)) return;
       event.system.push({ type: "text", text: instructions(doc) });
     });
   }

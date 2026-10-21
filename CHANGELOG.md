@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 — 2026-10-21
+
+### Fixed
+
+- **The card now works in a session that has never used it.** The prompt block was skipped whenever
+  the card was empty, on the reasoning that it saved tokens. A fresh session therefore received no
+  instructions at all: the agent saw only the tool catalogue and the card went unused — the
+  sessions that most needed telling were the ones never told.
+- `focus_get` answers an empty card with the workflow and the state list, rather than a one-line
+  refusal. It is the one `focus_*` tool whose description the catalogue always showed, so its
+  answer has to carry the instructions.
+
+### Changed
+
+- An empty card ends the prompt block with an explicit invitation to start one, instead of a bare
+  `Focus: (not set)`.
+- All eight tools are declared `pinned`, so their descriptions and schemas appear in the tool
+  catalogue rather than collapsing into a `focus (8 tools, 1 shown)` summary. The operational detail
+  lives in those descriptions; summarising them away is what stopped them being read.
+- The namespace description reads as an instruction — *"Maintain this session's focus card: set the
+  status at each phase, tick actions off as they land…"* — rather than a label, since it is the only
+  sentence always visible.
+
+### Notes
+
+- The block is roughly 450 tokens on every model call, in every session, including ones that never
+  touch the card. That is the cost of the fix, and `options.instructions: false` remains the
+  explicit opt-out.
+
 ## 0.2.0 — 2026-10-20
 
 ### Added

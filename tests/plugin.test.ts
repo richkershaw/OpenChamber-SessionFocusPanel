@@ -22,6 +22,7 @@ interface RegisteredTool {
   name: string;
   description: string;
   input: { type?: string; properties?: Record<string, unknown>; required?: string[] };
+  options?: { namespace?: string; pinned?: boolean };
   execute: (input: unknown, context: { sessionID: string }) => Promise<{ content?: unknown }>;
 }
 
@@ -76,16 +77,24 @@ test("registers the eight focus tools in one namespace", async () => {
   assert.deepEqual([...tools.keys()].sort(), [
     "add", "begin", "complete", "drop", "get", "link", "set", "status",
   ]);
-  assert.deepEqual(namespaces, [{ name: "focus", description: "Read and maintain this session's focus card" }]);
+  // The catalogue line is the only sentence always visible, so it has to read as
+  // an instruction rather than as a label.
+  assert.equal(namespaces.length, 1);
+  assert.equal(namespaces[0].name, "focus");
+  assert.match(namespaces[0].description, /^Maintain this session's focus card/);
   for (const tool of tools.values()) {
     assert.ok(tool.description.length > 20, `${tool.name} has a real description`);
     assert.equal(tool.input.type, "object");
+    // Pinned keeps every description in the catalogue instead of summarising the
+    // namespace as "8 tools, 1 shown" — which is what stopped the agent ever
+    // reading them.
+    assert.equal(tool.options?.pinned, true, `${tool.name} is pinned`);
   }
 });
 
 test("nothing is written until a tool is called", async () => {
   const { call, readStore } = await load();
-  assert.match(await call("get"), /No focus set/);
+  assert.match(await call("get"), /No focus card for this session yet/);
   await assert.rejects(readStore(), "the store is not created by merely loading the plugin");
 });
 
@@ -183,11 +192,39 @@ test("focus_set moves the task lifecycle, not the activity", async () => {
   assert.equal(doc.status, undefined, "setting the lifecycle does not invent an activity");
 });
 
-test("the hook stays quiet for an untouched session", async () => {
+test("the hook tells an untouched session what the card is for", async () => {
+  // This used to assert the opposite — `system.length === 0`, on the reasoning
+  // that an empty card was "not worth the tokens". That gate was a cold-start
+  // hole: a fresh session got no instructions at all, so the agent saw only the
+  // tool catalogue and the card went unused. The empty session is exactly the one
+  // that needs telling.
   const { hooks } = await load();
   const event = { sessionID: SESSION, system: [] as Array<{ type: "text"; text: string }> };
   await hooks[0].callback(event);
-  assert.equal(event.system.length, 0, "an empty card is not worth the tokens");
+
+  assert.equal(event.system.length, 1, "an untouched session is told about the card");
+  const block = event.system[0].text;
+  assert.match(block, /## Focus/);
+  assert.match(block, /focus_set/);
+  assert.match(block, /card is empty\. Start it now/, "and is asked to start one");
+  assert.match(block, /Status: \(not set\)/, "with the empty state spelled out");
+  for (const state of ACTIVITY_STATES) {
+    assert.ok(block.includes(state), `${state} is offered even before a card exists`);
+  }
+});
+
+test("focus_get teaches the workflow when there is no card yet", async () => {
+  // The one tool whose description the catalogue always showed, so its answer has
+  // to carry the instructions rather than point at descriptions nobody reads.
+  const { call } = await load();
+  const guide = await call("get");
+  assert.match(guide, /No focus card for this session yet/);
+  assert.match(guide, /focus_set/);
+  assert.match(guide, /focus_add/);
+  assert.match(guide, /focus_status/);
+  for (const state of ACTIVITY_STATES) {
+    assert.ok(guide.includes(state), `${state} is listed`);
+  }
 });
 
 test("instructions: false leaves the tools and drops the hook", async () => {
